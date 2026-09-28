@@ -28,18 +28,18 @@ Nest 애플리케이션은 Railway가 주입하는 `PORT`를 사용하며, `GET 
 
 ## Prisma migration
 
-현재 저장소에는 `prisma/schema.prisma`, Prisma CLI 의존성, committed migration이 없다. 따라서 아직 **Pre-deploy Command를 설정하지 않는다**. 이 상태에서 `npx prisma migrate deploy`를 설정하면 schema를 찾지 못해 배포가 실패한다.
+`prisma/schema.prisma`는 PostgreSQL과 `DATABASE_URL` 환경변수를 사용하도록 구성되어 있다. Prisma Client와 CLI도 배포 이미지에 포함되는 `dependencies`로 설치했다.
 
-Prisma를 도입하는 별도 DB 이슈에서 다음을 함께 완료한 뒤 Railway `Settings → Deploy → Pre-deploy Command`에 아래 명령을 설정한다.
+Railway의 Pre-deploy Command는 `railway.json`에 아래처럼 선언되어 있다.
 
 ```text
-npx prisma migrate deploy
+npm run db:migrate
 ```
 
-- `prisma`를 배포 이미지에 포함되는 의존성으로 추가
-- `prisma/schema.prisma` 추가 및 `DATABASE_URL` 참조
-- migration 파일 생성·커밋
-- 스테이징 또는 빈 DB에서 migration 성공 확인
+- 위 스크립트는 `prisma migrate deploy`를 실행한다.
+- 현재는 모델과 committed migration이 없으므로 적용할 테이블 변경도 없다.
+- 첫 DB 모델을 추가할 때는 `prisma migrate dev --name <변경이름>`으로 migration 파일을 생성해 함께 커밋한다.
+- `main` 병합 전에는 Railway 또는 별도 테스트 DB에서 migration 성공을 확인한다.
 
 Pre-deploy 명령은 애플리케이션 시작 전 별도 컨테이너에서 실행되며, 실패하면 배포도 중단된다. timeout은 우선 300초로 설정하고, 실제 migration 시간에 맞게 조정한다.
 

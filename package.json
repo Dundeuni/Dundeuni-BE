@@ -4,7 +4,9 @@
   "private": true,
   "description": "든든이 디지털 안전 서비스 백엔드",
   "scripts": {
-    "build": "nest build",
+    "build": "npm run prisma:generate && nest build",
+    "prisma:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
     "start": "node dist/main",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
@@ -19,8 +21,10 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/swagger": "^11.0.0",
+    "@prisma/client": "^6.19.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "prisma": "^6.19.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
