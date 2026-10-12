@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { validateAiImageResponseV1 } from './image-analysis-v1.validator';
 import { ApiError } from '../../common/http/api-error';
 
 export interface ImageAnalysisResult {
@@ -29,6 +30,10 @@ export class ImageAnalysisService {
     @Inject(IMAGE_ANALYSIS_PROVIDER)
     private readonly provider: ImageAnalysisProvider,
   ) {}
+  // 실제 Provider 연동 시 사용할 내부 응답 검증 진입점. 기존 analyze 경로는 유지한다.
+  validateV1Response(value: unknown) {
+    return validateAiImageResponseV1(value);
+  }
   async analyze(file: Express.Multer.File): Promise<ImageAnalysisResult> {
     try {
       const result = await this.provider.analyze(file);

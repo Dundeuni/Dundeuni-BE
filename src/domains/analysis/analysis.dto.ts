@@ -17,3 +17,9 @@ export class CreateAnalysisDto {
   })
   type!: AnalysisType;
 }
+
+// 신규 공개 결과 계약 준비. 현재 POST 응답에는 아직 추가하지 않는다.
+export {
+  ImageModelPublicResultDto,
+  ImageModelsPublicResultDto,
+} from './image-analysis-v1.dto';

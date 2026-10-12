@@ -2,7 +2,6 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { Analysis } from '@prisma/client';
-import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from '../src/app.module';
@@ -26,11 +25,9 @@ describe('IMAGE analysis API', () => {
   const repository = {
     create: jest.fn(
       async (userId: string, requestHash: string, expiresAt: Date) => {
-        const idempotencyKey = randomUUID();
         const row: Analysis = {
           id: `id-${rows.size}`,
           userId,
-          idempotencyKey,
           requestHash,
           expiresAt,
           type: 'IMAGE',
@@ -39,11 +36,16 @@ describe('IMAGE analysis API', () => {
           aiRiskLevel: null,
           reasons: null,
           modelVersion: null,
+          imageResultStatus: null,
+          summary: null,
+          summaryStatus: null,
+          summaryModel: null,
+          summarizedAt: null,
           errorCode: null,
           createdAt: new Date(),
           completedAt: null,
         };
-        rows.set(`${userId}:${idempotencyKey}`, row);
+        rows.set(row.id, row);
         return row;
       },
     ),

@@ -20,12 +20,41 @@ enum AnalysisStatus {
   FAILED
 }
 
+enum ImageResultStatus {
+  COMPLETED
+  PARTIAL_FAILED
+  FAILED
+}
+
+enum ImageModelKind {
+  GENERATION
+  MANIPULATION
+}
+
+enum ImageModelStatus {
+  SUCCEEDED
+  FAILED
+}
+
+enum ImageModelDecision {
+  AI_GENERATED_SUSPECTED
+  NO_CLEAR_GENERATION_SIGNAL
+  MANIPULATION_SUSPECTED
+  NO_CLEAR_MANIPULATION_SIGNAL
+  INCONCLUSIVE
+}
+
+enum AnalysisSummaryStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
 model Analysis {
   id                String         @id @default(uuid()) @db.Uuid
   userId            String
   type              AnalysisType
   status            AnalysisStatus @default(QUEUED)
-  idempotencyKey    String
   requestHash       String
   aiGenerationScore Float?
   aiRiskLevel       String?
@@ -36,6 +65,32 @@ model Analysis {
   completedAt       DateTime?
   expiresAt         DateTime
 
-  @@unique([userId, idempotencyKey])
+  imageResultStatus ImageResultStatus?
+  modelResults      AnalysisModelResult[]
+  summary           String?
+  summaryStatus     AnalysisSummaryStatus?
+  summaryModel      String?
+  summarizedAt      DateTime?
+
   @@map("analysis_requests")
+}
+
+model AnalysisModelResult {
+  id            String              @id @default(uuid()) @db.Uuid
+  analysisId    String              @db.Uuid
+  analysis      Analysis            @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  kind          ImageModelKind
+  status        ImageModelStatus
+  displayScore  Int?
+  decision      ImageModelDecision?
+  reasons       Json
+  limitations   String[]
+  modelName     String
+  modelVersion  String
+  policyVersion String
+  errorCode     String?
+  retryable     Boolean?
+
+  @@unique([analysisId, kind])
+  @@map("analysis_model_results")
 }

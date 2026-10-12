@@ -11,6 +11,7 @@ import { UploadedImageCleanupInterceptor } from './uploaded-image-cleanup.interc
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBody,
+  ApiExtraModels,
   ApiConsumes,
   ApiOperation,
   ApiResponse,
@@ -22,8 +23,10 @@ import {
 // import { AccessTokenGuard, AuthenticatedRequest } from '../../common/auth/access-token.guard';
 import { ApiErrorFilter } from '../../common/http/api-error';
 import { CreateAnalysisDto } from './analysis.dto';
+import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
 import { AnalysisService } from './analysis.service';
 
+@ApiExtraModels(ImageModelsPublicResultDto)
 @ApiTags('Analysis')
 // @ApiBearerAuth()
 @Controller('analysis')
