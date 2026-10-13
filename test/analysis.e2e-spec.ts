@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -8,6 +9,8 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AnalysisRepository } from '../src/domains/analysis/analysis.repository';
 import { IMAGE_ANALYSIS_PROVIDER } from '../src/domains/analysis/image-analysis.service';
+import { MockImageAnalysisProvider } from '../src/domains/analysis/mock-image-analysis.provider';
+import { ImageModelsPublicResultDto } from '../src/domains/analysis/image-analysis-v1.dto';
 import { AnalysisUsageService } from '../src/domains/analysis/analysis-usage.service';
 
 const secret = 'test-access-secret';
@@ -20,13 +23,14 @@ const png = () =>
 describe('IMAGE analysis API', () => {
   let app: INestApplication;
   let rows: Map<string, Analysis>;
+  let modelRows: Map<string, ImageModelsPublicResultDto>;
   const provider = { analyze: jest.fn() };
   const usage = { reserveAiUsage: jest.fn(), releaseAiUsage: jest.fn() };
   const repository = {
     create: jest.fn(
       async (userId: string, requestHash: string, expiresAt: Date) => {
         const row: Analysis = {
-          id: `id-${rows.size}`,
+          id: randomUUID(),
           userId,
           requestHash,
           expiresAt,
@@ -55,6 +59,27 @@ describe('IMAGE analysis API', () => {
     complete: jest.fn(async (id: string, result: object) =>
       update(id, { ...result, status: 'COMPLETED', completedAt: new Date() }),
     ),
+    completeV1: jest.fn(
+      async (
+        id: string,
+        result: ImageModelsPublicResultDto,
+        completedAt: Date,
+      ) => {
+        modelRows.set(id, result);
+        const generation =
+          result.generation?.status === 'SUCCEEDED' ? result.generation : null;
+        return update(id, {
+          status: result.status === 'FAILED' ? 'FAILED' : 'COMPLETED',
+          imageResultStatus: result.status,
+          completedAt,
+          errorCode: result.status === 'FAILED' ? 'ANALYSIS503' : null,
+          aiGenerationScore: generation?.displayScore ?? null,
+          aiRiskLevel: null,
+          reasons: generation?.reasons ?? null,
+          modelVersion: generation?.modelVersion ?? null,
+        });
+      },
+    ),
     fail: jest.fn(async (id: string, errorCode: string) =>
       update(id, { status: 'FAILED', errorCode, completedAt: new Date() }),
     ),
@@ -71,6 +96,7 @@ describe('IMAGE analysis API', () => {
         get: (key: string) =>
           ({
             JWT_ACCESS_SECRET: secret,
+            AI_REQUEST_TIMEOUT_MS: '100',
             ANALYSIS_MAX_FILE_BYTES: '128',
             ANALYSIS_RETENTION_SECONDS: '86400',
           })[key],
@@ -94,6 +120,7 @@ describe('IMAGE analysis API', () => {
   });
   beforeEach(() => {
     rows = new Map();
+    modelRows = new Map();
     jest.clearAllMocks();
     provider.analyze.mockReset().mockResolvedValue({
       aiGenerationScore: 82.4,
@@ -280,6 +307,115 @@ describe('IMAGE analysis API', () => {
       { description: '테스트 근거' },
     ]);
     expect(response.body.result.fraudScore).toBeUndefined();
+  });
+  it.each([
+    ['BOTH_SUCCESS', 202, 'COMPLETED', 80],
+    ['GENERATION_FAILED', 202, 'PARTIAL_FAILED', null],
+    ['MANIPULATION_FAILED', 202, 'PARTIAL_FAILED', 80],
+    ['BOTH_FAILED', 503, 'FAILED', null],
+    ['INCONCLUSIVE', 202, 'COMPLETED', null],
+  ] as const)(
+    'connects Mock %s without changing FE fields',
+    async (scenario, http, aggregate, score) => {
+      const mock = new MockImageAnalysisProvider(scenario);
+      provider.analyze.mockImplementationOnce((...args) =>
+        mock.analyze(args[0], args[1], args[2]),
+      );
+      const response = await upload().expect(http);
+      const row = [...rows.values()][0];
+      expect(row.imageResultStatus).toBe(aggregate);
+      expect(row.status).toBe(http === 503 ? 'FAILED' : 'COMPLETED');
+      expect(modelRows.get(row.id)?.generation).not.toBeNull();
+      expect(modelRows.get(row.id)?.manipulation).not.toBeNull();
+      const request = provider.analyze.mock.calls[0][1];
+      expect(request).toMatchObject({
+        analysisId: row.id,
+        sourceType: 'IMAGE',
+        models: 'ALL',
+      });
+      expect(request.elementId).toMatch(/^[0-9a-f-]{36}$/);
+      if (http === 202) {
+        expect(response.body.result.aiGenerationScore).toBe(score);
+        expect(response.body.result.aiRiskLevel).toBeNull();
+        expect(response.body.result).not.toHaveProperty('generation');
+        expect(response.body.result).not.toHaveProperty('rawScore');
+        expect(Object.keys(response.body.result).sort()).toEqual(
+          [
+            'analysisId',
+            'type',
+            'status',
+            'aiGenerationScore',
+            'aiRiskLevel',
+            'reasons',
+            'modelVersion',
+            'errorCode',
+            'createdAt',
+            'completedAt',
+            'expiresAt',
+          ].sort(),
+        );
+      } else {
+        expect(response.body).toMatchObject({
+          isSuccess: false,
+          code: 'ANALYSIS503',
+          result: null,
+        });
+        expect(repository.fail).not.toHaveBeenCalled();
+        expect(usage.releaseAiUsage).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+  it('times out Mock, marks FAILED, aborts and cleans the image', async () => {
+    const mock = new MockImageAnalysisProvider('TIMEOUT');
+    provider.analyze.mockImplementationOnce((...args) =>
+      mock.analyze(args[0], args[1], args[2]),
+    );
+    await upload().expect(503);
+    expect([...rows.values()][0].status).toBe('FAILED');
+    expect(provider.analyze.mock.calls[0][2].aborted).toBe(true);
+    expect(
+      provider.analyze.mock.calls[0][0].buffer.every(
+        (byte: number) => byte === 0,
+      ),
+    ).toBe(true);
+    expect(repository.completeV1).not.toHaveBeenCalled();
+  });
+  it('rejects malformed v1 data and mismatched context before persistence', async () => {
+    provider.analyze.mockImplementationOnce(async (...args) => ({
+      ...(await new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(
+        args[0],
+        args[1],
+      )),
+      analysisId: 'other',
+    }));
+    await upload().expect(503);
+    expect(repository.completeV1).not.toHaveBeenCalled();
+  });
+  it('returns COMMON500 on v1 storage failure', async () => {
+    provider.analyze.mockImplementationOnce((...args) =>
+      new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(
+        args[0],
+        args[1],
+        args[2],
+      ),
+    );
+    repository.completeV1.mockRejectedValueOnce(new Error('DB error'));
+    const response = await upload().expect(500);
+    expect(response.body.code).toBe('COMMON500');
+    expect([...rows.values()][0].status).toBe('FAILED');
+  });
+  it('accepts a JPEG upload with Mock', async () => {
+    provider.analyze.mockImplementationOnce((...args) =>
+      new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(
+        args[0],
+        args[1],
+        args[2],
+      ),
+    );
+    await post()
+      .field('type', 'IMAGE')
+      .attach('file', Buffer.from([255, 216, 255, 217]), 'test.jpg')
+      .expect(202);
   });
   it('keeps health API working', async () => {
     await request(app.getHttpServer())

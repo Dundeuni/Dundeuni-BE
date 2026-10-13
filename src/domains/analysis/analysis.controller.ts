@@ -41,7 +41,7 @@ export class AnalysisController {
   @ApiOperation({
     summary: '이미지 분석 요청 생성',
     description:
-      'P0 유형 IMAGE/TEXT/URL 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. 실제 Provider 미연동 시 503.',
+      'P0 유형 IMAGE/TEXT/URL 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. AI_PROVIDER=mock은 CuRe/TruFor v0.2 개발 전용 가상 분석입니다. 부분 실패는 성공 모델을 보존하며 202, 전체 실패/타임아웃은 503. 위험도 매핑 미확정 시 null.',
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
