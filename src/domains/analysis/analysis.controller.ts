@@ -1,5 +1,11 @@
+import { AnalysisSummaryRepository } from './analysis-summary.repository';
+import { Request } from 'express';
 import {
   Body,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Req,
   Controller,
   HttpCode,
   Post,
@@ -33,7 +39,62 @@ import { AnalysisService } from './analysis.service';
 // @UseGuards(AccessTokenGuard)
 @UseFilters(ApiErrorFilter)
 export class AnalysisController {
-  constructor(private readonly service: AnalysisService) {}
+  constructor(
+    private readonly service: AnalysisService,
+    private readonly summaries: AnalysisSummaryRepository,
+  ) {}
+
+  @Get(':analysisId/summary')
+  @ApiOperation({
+    summary: '이미지 분석 비동기 요약 조회',
+    description:
+      'PENDING/FAILED는 summary=null. 비활성화 또는 작업 등록 전 summaryStatus=null. 개발용 인증 정책 유지.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'ANALYSIS200: 요약 상태 조회',
+    schema: {
+      type: 'object',
+      properties: {
+        isSuccess: { type: 'boolean', example: true },
+        code: { type: 'string', example: 'ANALYSIS200' },
+        message: {
+          type: 'string',
+          example: '이미지 분석 요약 조회에 성공했습니다.',
+        },
+        result: {
+          type: 'object',
+          properties: {
+            analysisId: { type: 'string', format: 'uuid' },
+            summaryStatus: {
+              type: 'string',
+              enum: ['PENDING', 'COMPLETED', 'FAILED'],
+              nullable: true,
+            },
+            summary: { type: 'string', nullable: true },
+            summaryModel: { type: 'string', nullable: true },
+            summarizedAt: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'COMMON400: UUID 형식 오류' })
+  @ApiResponse({
+    status: 404,
+    description: 'COMMON404: 없거나 다른 사용자/만료된 기록',
+  })
+  @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
+  getSummary(
+    @Param('analysisId', new ParseUUIDPipe()) id: string,
+    @Req() request: Request & { user?: { id: string } },
+  ) {
+    return this.summaries.get(id, request.user?.id ?? 'development-user');
+  }
 
   @Post()
   @HttpCode(202)
@@ -130,11 +191,11 @@ export class AnalysisController {
   })
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   create(
-    // @Req() request: AuthenticatedRequest,
+    @Req() request: Request & { user?: { id: string } },
     @Body() _body: CreateAnalysisDto,
     @UploadedFile() file: Express.Multer.File | undefined,
   ) {
     // return this.service.create(request.user.id, file);
-    return this.service.create('development-user', file);
+    return this.service.create(request.user?.id ?? 'development-user', file);
   }
 }

@@ -67,6 +67,7 @@ model Analysis {
 
   imageResultStatus ImageResultStatus?
   modelResults      AnalysisModelResult[]
+  summaryJob        AnalysisSummaryJob?
   summary           String?
   summaryStatus     AnalysisSummaryStatus?
   summaryModel      String?
@@ -93,4 +94,27 @@ model AnalysisModelResult {
 
   @@unique([analysisId, kind])
   @@map("analysis_model_results")
+}
+
+enum SummaryJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model AnalysisSummaryJob {
+  analysisId    String           @id @db.Uuid
+  analysis      Analysis         @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  status        SummaryJobStatus @default(PENDING)
+  attempts      Int              @default(0)
+  nextRunAt     DateTime         @default(now())
+  leaseUntil    DateTime?
+  leaseToken    String?          @db.Uuid
+  lastErrorCode String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([status, nextRunAt])
+  @@map("analysis_summary_jobs")
 }

@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { AnalysisSummaryRepository } from './analysis-summary.repository';
+import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Analysis } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
@@ -15,6 +16,7 @@ export class AnalysisService {
     private readonly imageAnalysis: ImageAnalysisService,
     private readonly usage: AnalysisUsageService,
     private readonly config: ConfigService,
+    @Optional() private readonly summaries?: AnalysisSummaryRepository,
   ) {}
 
   async create(userId: string, file: Express.Multer.File | undefined) {
@@ -87,6 +89,7 @@ export class AnalysisService {
             result.models,
             result.completedAt,
           );
+          await this.summaries?.enqueueSafely(analysis.id);
           if (result.models.status === 'FAILED') {
             modelFailureSaved = true;
             throw new ApiError(

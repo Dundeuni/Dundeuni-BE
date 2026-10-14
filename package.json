@@ -14,9 +14,12 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy"
+    "prisma:migrate": "prisma migrate deploy",
+    "gemini:smoke": "node scripts/gemini-smoke.cjs",
+    "summary:recover": "node scripts/recover-summary.cjs"
   },
   "dependencies": {
+    "@google/genai": "^2.29.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.1",

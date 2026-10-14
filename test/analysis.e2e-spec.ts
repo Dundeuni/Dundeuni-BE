@@ -1,3 +1,4 @@
+import { AnalysisSummaryRepository } from '../src/domains/analysis/analysis-summary.repository';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -24,6 +25,10 @@ describe('IMAGE analysis API', () => {
   let app: INestApplication;
   let rows: Map<string, Analysis>;
   let modelRows: Map<string, ImageModelsPublicResultDto>;
+  const summaries = {
+    enabled: () => false,
+    enqueueSafely: jest.fn().mockResolvedValue(undefined),
+  };
   const provider = { analyze: jest.fn() };
   const usage = { reserveAiUsage: jest.fn(), releaseAiUsage: jest.fn() };
   const repository = {
@@ -101,6 +106,8 @@ describe('IMAGE analysis API', () => {
             ANALYSIS_RETENTION_SECONDS: '86400',
           })[key],
       })
+      .overrideProvider(AnalysisSummaryRepository)
+      .useValue(summaries)
       .overrideProvider(PrismaService)
       .useValue({})
       .overrideProvider(AnalysisRepository)
@@ -119,6 +126,7 @@ describe('IMAGE analysis API', () => {
     await app.listen(0, '127.0.0.1');
   });
   beforeEach(() => {
+    summaries.enqueueSafely.mockClear();
     rows = new Map();
     modelRows = new Map();
     jest.clearAllMocks();
@@ -416,6 +424,23 @@ describe('IMAGE analysis API', () => {
       .field('type', 'IMAGE')
       .attach('file', Buffer.from([255, 216, 255, 217]), 'test.jpg')
       .expect(202);
+  });
+  it('registers summary only after model persistence without calling Gemini in POST', async () => {
+    provider.analyze.mockImplementation((request, signal) =>
+      new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(request, signal),
+    );
+    const response = await request(app.getHttpServer())
+      .post('/api/analysis')
+      .field('type', 'IMAGE')
+      .attach('file', png(), 'image.png')
+      .expect(202);
+    expect(summaries.enqueueSafely).toHaveBeenCalledWith(
+      response.body.result.analysisId,
+    );
+    expect(modelRows.has(response.body.result.analysisId)).toBe(true);
+    expect(repository.completeV1.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      summaries.enqueueSafely.mock.invocationCallOrder.at(-1)!,
+    );
   });
   it('keeps health API working', async () => {
     await request(app.getHttpServer())

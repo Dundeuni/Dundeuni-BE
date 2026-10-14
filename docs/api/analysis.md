@@ -329,3 +329,96 @@ Mock 요청에서도 analysisId/elementId UUID, requestId UUID v4, 미래 UTC RF
 기존 공개 POST 응답·인증 임시 비활성화·development-user·멱등성 제거 상태 유지.
 기존 Prisma 스키마와 migration 변경 없음. 모델별 저장 whitelist 및 UNIQUE/부분 성공 보존 유지.
 실제 HTTP/추론/Gemini/FE 확장/heatmap 저장/SCREEN crop/큐·재시도/quota 구현 없음.
+
+## Gemini 비동기 요약 (Issue #7)
+
+기존 POST 응답 형식과 상태 코드는 유지한다. CuRe/TruFor 결과를 저장한 뒤 요약 작업을 등록하고 반환한다. Gemini 호출은 HTTP 요청에서 수행하지 않는다. 전체 모델 실패의 기존 503 응답도 유지하지만, 저장된 실패 결과는 요약할 수 있다. 레거시 단일 모델 Provider 결과는 요약 대상에서 제외한다.
+
+### GET `/api/analysis/{analysisId}/summary`
+
+Body 없음. analysisId는 UUID. 현재 개발용 인증 생략 정책을 유지하며 `development-user` 기록만 조회한다. 인증 미들웨어/Guard가 적용되면 서버가 설정한 `request.user.id`로 조회한다. 인증 복원은 별도 작업이다.
+
+```json
+{
+  "isSuccess": true,
+  "code": "ANALYSIS200",
+  "message": "이미지 분석 요약 조회에 성공했습니다.",
+  "result": {
+    "analysisId": "8c1b24c0-3186-4ee5-a679-74acb055b001",
+    "summaryStatus": "COMPLETED",
+    "summary": "AI 생성 여부는 판단하기 어렵습니다. 이미지 변조와 관련된 의심 신호가 감지되었습니다. 출처와 원본을 확인하는 것이 좋습니다.",
+    "summaryModel": "configured-gemini-model",
+    "summarizedAt": "2026-10-13T10:00:00.000Z"
+  }
+}
+```
+
+| 필드 | 타입 | Nullable | 설명 |
+| --- | --- | --- | --- |
+| result.analysisId | string(UUID) | F | 분석 ID |
+| result.summaryStatus | string | T | PENDING / COMPLETED / FAILED. 비활성화·기존 데이터·등록 전에는 null |
+| result.summary | string | T | 검증된 한국어 2~4문장, 최대 600자. 완료 외에는 null |
+| result.summaryModel | string | T | 완료 시 사용한 설정 모델명 |
+| result.summarizedAt | string(ISO 8601 UTC) | T | 완료 시각 |
+
+200 ANALYSIS200: 상태 조회 성공(요약 실패도 조회는 성공). 400 COMMON400: UUID 오류. 404 COMMON404: 기록 없음/타인 기록/보관기간 만료. 500 COMMON500: 내부 오류. 오류는 기존 공통 envelope, result=null.
+
+FE는 POST의 analysisId로 이 API를 폴링한다. PENDING이면 간격을 두고 다시 조회하고 COMPLETED/FAILED면 중단한다. null은 아직 등록되지 않았거나 요약 비활성화 상태이며 무한 폴링하지 않는다. 이미지 분석 결과와 요약 상태는 독립적이다.
+
+### 설정 및 Worker 운영
+
+1. 새 `20261014000000_analysis_summary_jobs` migration을 배포 절차에 따라 먼저 적용한다. 기존 migration은 수정하지 않는다.
+2. 서버 환경에 GEMINI_API_KEY 및 GEMINI_MODEL을 설정한다. 키를 앱/로그/저장소에 노출하지 않는다.
+3. GEMINI_SUMMARY_ENABLED=true로 켠다. 환경변수 누락 시 기본 비활성화이며 기존 `.env`는 자동 변경하지 않는다. enabled 상태에서 키/모델이 없으면 작업은 재시도 없이 FAILED가 된다.
+4. Nest 앱과 함께 Worker가 실행된다. GEMINI_TIMEOUT_MS=15000, GEMINI_SUMMARY_POLL_MS=1000, GEMINI_SUMMARY_CONCURRENCY=1(프로세스당 최대 8), GEMINI_SUMMARY_MAX_ATTEMPTS=3(최대 10), GEMINI_SUMMARY_RETRY_MS=5000. 양의 정수 설정이며 재시도 간격은 지수 증가한다. SDK 자체 재시도는 끈다.
+
+`analysis_summary_jobs`의 analysisId PK/FK로 중복 작업을 막는다. PENDING/RUNNING/COMPLETED/FAILED, attempts, nextRunAt, leaseUntil, leaseToken, lastErrorCode, 생성/수정 시각을 저장한다. 기존 summaryStatus는 공개 요약 상태이며 RUNNING 작업도 PENDING으로 보인다.
+
+모델 결과 저장과 작업 등록은 **서로 다른 트랜잭션**이다. 등록 실패는 성공한 이미지 분석을 실패시키지 않으며 코드만 로그에 남긴다. Worker는 요약 미등록 완료/실패 모델 결과를 주기적으로 검색하여 등록 공백을 복구한다. 등록 시 summaryStatus=PENDING과 작업 생성은 한 트랜잭션이다. 이전 미요약 기록도 보관기간 내에서 자동 등록된다.
+
+`FOR UPDATE SKIP LOCKED`로 원자적으로 선점한다. lease는 Gemini timeout+30초이며 재시작 시 만료된 RUNNING 작업을 다시 선점한다. leaseToken과 유효기간이 일치하는 Worker만 job 및 Analysis 요약을 같은 트랜잭션에서 저장한다. 이미 완료한 요약은 덮어쓰지 않는다. 5xx/네트워크/timeout은 제한적으로 재시도하고(429는 아래 별도 정책 적용) 설정/인증/형식/모순 오류는 즉시 실패한다. 종료 시 호출을 abort하고 작업을 재예약한다. 강제 종료나 DB 장애는 lease 복구로 처리한다. 여러 프로세스는 개별 동시성 제한을 가지며 전체 호출 수는 프로세스 수에 비례한다.
+
+Gemini에는 DB 모델별 상태·판정·표시점수·근거·제한사항과 기존 calculateOverallResult 대표 판정만 전달한다. 이미지/경로/localization/rawScore/사용자·추적 ID/토큰은 필드에서 제외한다. 근거·제한사항의 흔한 이메일/전화/URL/Bearer 패턴은 가리고 길이와 개수를 제한한다. 외부 텍스트를 명령으로 취급하지 않는 system instruction 및 JSON 출력 검증을 사용한다. 판정 echo, 문장 수·길이·한국어 및 명백한 판정 모순을 검사하지만 자연어 사실성이나 임의의 개인정보 패턴을 완전하게 보장하는 검사는 아니다. 공급자 근거에는 개인정보를 넣지 않는 계약이 필요하다.
+
+요약 작업은 모델 결과·이미지 처리 상태를 변경하지 않는다. 요약은 기존 expiresAt을 따른다. 만료된 기록 조회는 404, 처리 전 만료 작업은 FAILED가 된다. 기존 자동 삭제 미구현 정책은 유지한다. Gemini 요청은 재시작/lease 만료로 중복 호출될 수 있지만 DB 완료 저장은 멱등적이다. abort는 외부 서비스 처리/과금 중단을 보장하지 않는다.
+
+실제 Gemini 호출 검증은 키/모델을 별도 설정한 개발 환경에서 진행한다. 자동화 테스트는 Mock Client이며 실제 AI/Gemini 연동 검증과 구분한다.
+
+### Gemini 장애 진단·재시도·관리자 복구 보완
+
+호출 로그에는 실제 SDK 호출에 사용한 모델, timeoutMs, durationMs, HTTP status, 내부 오류 코드와 고정된 오류 메시지 분류(reason)를 기록한다. 공급자의 임의 오류 메시지는 개인정보·키·본문을 포함할 수 있어 출력하지 않는다. 알려진 메시지만 `model_overloaded`, `quota_or_rate_limit`, `model_unavailable`, `upstream_timeout`으로 분류하고 나머지는 `upstream_message_omitted`로 표시한다. 모델명도 허용된 Gemini 모델명 형식만 출력한다. 정상 호출도 소요 시간을 기록한다.
+
+5xx(503/504 포함)·네트워크·timeout은 동일한 DB 작업을 재예약한다. 재시도 간격은 `min(RETRY_MAX_MS, RETRY_MS × 2^(attempts-1))`의 50~100% equal jitter이다. 기본 최대 간격은 GEMINI_SUMMARY_RETRY_MAX_MS=300000. attempts 상한·leaseToken fencing·선점 잠금은 유지하며 SDK 내부 재시도는 비활성화한다. 401/403 및 기타 영구 오류는 즉시 FAILED.
+
+429는 `GEMINI_RATE_LIMIT`으로 구분한다. GEMINI_SUMMARY_RATE_LIMIT_POLICY=fail이 기본값이며 관리자에게 quota 확인을 맡긴다. 일시적 rate limit에 재시도가 필요하면 `retry`로 명시하고 GEMINI_SUMMARY_RATE_LIMIT_RETRY_MS=60000의 별도 cooldown+backoff+jitter를 사용한다. 동일 총 시도 횟수/최대 간격 상한을 적용한다. 이 정책은 quota를 늘리거나 우회하지 않으며 SDK Retry-After를 자동 적용하지 않는다.
+
+**이미지·DB 없는 단독 테스트** (API 사용량 발생, 자동 재시도 없음):
+
+```bash
+npm run build
+npm run gemini:smoke
+```
+
+현재 `.env`의 GEMINI_API_KEY/GEMINI_MODEL/GEMINI_TIMEOUT_MS로 고정된 공개 인사말만 보낸다. Nest/Worker/Prisma를 실행하지 않는다. 성공 여부·모델·소요시간·응답 글자 수 또는 안전한 오류 분류만 출력한다. 성공해도 실제 구조화된 요약 응답까지 검증한 것은 아니다. 키·사용자 데이터·응답 원문을 출력하지 않는다.
+
+**관리자 실패 작업 복구** (서버/DB 접근 권한이 있는 운영자만 실행):
+
+```bash
+npm run build
+npm run summary:recover -- <analysisId> --confirm
+```
+
+원인(모델·quota·서비스 가용성)을 확인한 뒤 대상 ID 하나만 명시한다. Worker를 시작하거나 Gemini를 직접 호출하지 않고 DB 작업을 PENDING으로 재등록한다. Worker 활성화 상태가 필요하다. job=FAILED 및 summaryStatus=FAILED, 모델 저장 완료, 미만료 기록만 허용한다. 기존 작업 행을 재사용하고 attempts=0, nextRunAt=현재로 초기화하며 lease·오류 코드를 지운다. job+Analysis 갱신은 단일 트랜잭션으로 처리한다. 동시 관리자 복구는 하나만 성공하고 RUNNING/PENDING/COMPLETED/만료/상태 불일치는 거부한다. 이전 Worker의 토큰은 완료 저장을 할 수 없다. CuRe/TruFor 및 POST 응답은 변경하지 않는다. 이전 실패 상세는 복구 전에 운영 로그로 확인한다(별도 영구 이력 테이블은 추가하지 않음).
+
+이번 보완에는 Prisma 스키마 변경이나 추가 Migration이 없다.
+
+
+이번 로컬 단독 호출 검증: 설정된 `gemini-3.8-flash`, timeout 30000ms로 공개 인사말 요청을 1회 수행하여 성공했다(약 19.6초, 응답 5자). 이는 단독 연결 확인이며 운영 안정성 또는 실제 모델 결과의 구조화된 요약 성공 검증은 아니다. HTTP timeout과 요약 검증 timeout은 같은 설정을 사용한다. 현재 `.env`는 보완 작업에서 변경하지 않았다.
+
+DB 선점 SQL은 `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'`로 TIMESTAMP(3) 예약/lease와 비교한다. 새 작업의 nextRunAt/createdAt도 명시적으로 UTC Date를 사용한다. PostgreSQL 세션이 Asia/Seoul인 환경에서 재시도 대기를 건너뛰거나 lease가 9시간 어긋나던 문제를 방지한다. 기존 데이터는 일괄 수정하지 않았으므로 이전 실패 작업은 관리자 복구 명령으로 재등록한다.
+
+### 요약 판정 검증 진단
+
+`SUMMARY_CONTRADICTION` 로그의 `diagnostic`에는 고정된 모델/조건 코드만 기록한다. 예: `generation:OPPOSITE_DECISION`, `manipulation:MISSING_SUSPICION`, `generation:MISSING_UNCERTAINTY`, `manipulation:MISSING_FAILURE`, `manipulation:MISSING_NOT_REQUESTED`, `generation:MISSING_MODEL_EXPLANATION`. 요약 원문·사용자 데이터는 출력하지 않는다. 기존 DB 오류 코드와 공개 API는 유지한다.
+
+생성/인공지능/AI로/CuRe, 변조/조작/합성/TruFor 표현을 인식하고 관련 절 전체를 검사한다. 의심/가능성이 있음/징후·흔적 감지, 판단 어려움/불분명/판단할 수 없음, 신호·흔적 없음/발견되지 않음 등 동의어를 허용한다. FAILED는 실제 분석 실패 설명을, 미요청은 미분석 설명을 요구한다. 뒤 문장에서 판정을 뒤집거나 실패를 정상 결과로 서술하면 차단한다. 프롬프트는 두 모델을 주어가 명확한 별도 문장으로 설명하도록 요청한다. 규칙 기반 검증이므로 모든 자연어 표현을 이해하는 검증은 아니며, 허용되지 않은 표현은 원문 대신 diagnostic으로 확인해 회귀 테스트와 함께 보완한다.
