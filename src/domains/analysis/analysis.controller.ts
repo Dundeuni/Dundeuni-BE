@@ -31,6 +31,7 @@ import { ApiErrorFilter } from '../../common/http/api-error';
 import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
 import { AnalysisService } from './analysis.service';
+import { AnalysisResultResponseDto } from './analysis-result.dto';
 
 @ApiExtraModels(ImageModelsPublicResultDto)
 @ApiTags('Analysis')
@@ -43,6 +44,26 @@ export class AnalysisController {
     private readonly service: AnalysisService,
     private readonly summaries: AnalysisSummaryRepository,
   ) {}
+
+  @Get(':analysisId')
+  @ApiOperation({
+    summary: '이미지 분석 결과 상세 조회',
+    description:
+      '저장된 분석 및 모델별 결과를 조회합니다. 요약은 기존 /summary에서 별도로 조회합니다. 개발용 인증 정책 유지.',
+  })
+  @ApiResponse({ status: 200, type: AnalysisResultResponseDto })
+  @ApiResponse({ status: 400, description: 'COMMON400: UUID 형식 오류' })
+  @ApiResponse({
+    status: 404,
+    description: 'COMMON404: 없거나 다른 사용자/만료된 기록',
+  })
+  @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
+  getResult(
+    @Param('analysisId', new ParseUUIDPipe()) id: string,
+    @Req() request: Request & { user?: { id: string } },
+  ) {
+    return this.service.findOne(request.user?.id ?? 'development-user', id);
+  }
 
   @Get(':analysisId/summary')
   @ApiOperation({
@@ -150,7 +171,7 @@ export class AnalysisController {
             aiRiskLevel: {
               type: 'string',
               nullable: true,
-              description: 'Provider 계약 미확정. CAUTION 등, 확정 판정 아님.',
+              description: '기존 Provider 위험도. overallResult와 별개이며 사기 확률이 아닙니다. 정책 미확정 시 null.',
             },
             reasons: {
               type: 'array',

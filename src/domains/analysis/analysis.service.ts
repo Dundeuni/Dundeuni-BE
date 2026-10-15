@@ -1,7 +1,15 @@
 import { AnalysisSummaryRepository } from './analysis-summary.repository';
 import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Analysis } from '@prisma/client';
+import { Analysis, AnalysisModelResult } from '@prisma/client';
+import { AnalysisResultResponseDto } from './analysis-result.dto';
+import { ImageModelPublicResultDto } from './image-analysis-v1.dto';
+import { calculateOverallResult } from './image-analysis-policy';
+import {
+  normalizeReasons,
+  normalizeTexts,
+  resultGuides,
+} from './analysis-result.normalizer';
 import { createHash, randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import { ApiError } from '../../common/http/api-error';
@@ -129,6 +137,57 @@ export class AnalysisService {
     }
   }
 
+  async findOne(
+    userId: string,
+    id: string,
+  ): Promise<AnalysisResultResponseDto> {
+    const row = await this.repository.findWithModelResults(id);
+    if (!row || row.userId !== userId || row.expiresAt <= new Date())
+      throw new ApiError(404, 'COMMON404', '분석 기록을 찾을 수 없습니다.');
+    const generation = this.publicModel(
+      row.modelResults.find((model) => model.kind === 'GENERATION'),
+    );
+    const manipulation = this.publicModel(
+      row.modelResults.find((model) => model.kind === 'MANIPULATION'),
+    );
+    const overallResult = calculateOverallResult(generation, manipulation);
+    return {
+      isSuccess: true,
+      code: 'ANALYSIS200',
+      message: '분석 결과 조회에 성공했습니다.',
+      result: {
+        ...this.response(row).result,
+        models:
+          row.imageResultStatus === null
+            ? null
+            : {
+                status: row.imageResultStatus,
+                generation,
+                manipulation,
+              },
+        overallResult,
+        guides: resultGuides(overallResult, generation, manipulation),
+      },
+    };
+  }
+  private publicModel(
+    model: AnalysisModelResult | undefined,
+  ): ImageModelPublicResultDto | null {
+    if (!model) return null;
+    return {
+      modelName: model.modelName,
+      modelVersion: model.modelVersion,
+      policyVersion: model.policyVersion,
+      status: model.status,
+      decision: model.status === 'FAILED' ? null : model.decision,
+      displayScore: model.status === 'FAILED' ? null : model.displayScore,
+      reasons: model.status === 'FAILED' ? [] : normalizeReasons(model.reasons),
+      limitations: normalizeTexts(model.limitations),
+      errorCode: model.errorCode,
+      retryable: model.retryable,
+    };
+  }
+
   private positiveConfig(name: string): number {
     const value = Number(this.config.get<string>(name));
     if (!Number.isSafeInteger(value) || value <= 0)
@@ -146,7 +205,8 @@ export class AnalysisService {
         status: analysis.status,
         aiGenerationScore: analysis.aiGenerationScore,
         aiRiskLevel: analysis.aiRiskLevel,
-        reasons: analysis.reasons,
+        reasons:
+          analysis.reasons === null ? null : normalizeReasons(analysis.reasons),
         modelVersion: analysis.modelVersion,
         errorCode: analysis.errorCode,
         createdAt: analysis.createdAt.toISOString(),

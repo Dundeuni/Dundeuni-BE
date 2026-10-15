@@ -29,7 +29,7 @@ type/파일 검증 → Analysis(QUEUED) 생성
 
 각 요청은 Provider 실행과 결과 저장을 기다리는 구조다. 성공 HTTP 상태는 요청 계약에 맞춰 202를 사용한다.
 같은 이미지를 다시 보내도 매번 새 분석 요청으로 처리한다.
-별도 작업 큐나 백그라운드 작업은 구현하지 않았다. GET 조회 API는 후속 범위다.
+이미지 분석은 동기 처리한다. Gemini 요약은 별도 DB 작업 큐/Worker로 비동기 처리하며, 분석 상세 GET은 아래 #89 계약을 따른다.
 
 ```json
 {
@@ -99,7 +99,7 @@ IMAGE 유형+MIME+이미지 바이트 SHA-256을 requestHash로 저장하지만 
 - `AnalysisUsageService`: IMAGE 1회 예약/차감. analysisId 기준 중복 방지와 실패 복구를 실제 Usage 시스템에 연결. 현재 차감 없음.
 - 실제 Usage와 Analysis 간 원자성/실패 복구 정책 확정. 구독 시스템은 이번 범위에서 구현하지 않음.
 - aiRiskLevel enum, 인증 issuer/audience, 파일 크기, 기록 동의·보관·삭제 정책 확정.
-- TEXT/URL 분석과 GET /api/analysis/{analysisId}는 후속 구현.
+- TEXT/URL 분석은 후속 구현. GET /api/analysis/{analysisId}는 아래 #89 계약을 따른다.
 
 ### 설치/검증
 
@@ -123,7 +123,7 @@ API 통합 테스트는 Nest/multipart/Swagger를 실제 실행하고 Repository
 `image-analysis-v1.dto.ts`에 AI wire 타입과 BE 공개 projection 타입을 분리하고,
 `ImageAnalysisService.validateV1Response`에 알려진 계약 규칙 검증 진입점을 마련했다.
 기존 `POST /api/analysis` 요청·응답·HTTP 상태·파일 검증·인증 임시 비활성화 상태는 유지한다.
-GET 상세 조회는 기존에도 미구현이며 이번 작업에서도 추가하지 않는다. 멱등성 키는 이전 제거 상태를 유지한다.
+이 v1 구조 준비 단계에서는 GET 상세 조회를 추가하지 않았다. 이후 #89 구현은 아래 절을 따른다. 멱등성 키는 이전 제거 상태를 유지한다.
 Swagger components에 새 projection을 등록했지만 현재 POST 응답에 이를 추가하지 않는다.
 
 ### 상태와 저장 구조
@@ -142,7 +142,7 @@ Swagger components에 새 projection을 등록했지만 현재 POST 응답에 �
 ### Repository 재사용 메서드
 
 - `saveModelResults(analysisId, result)`: AI wire 객체가 아닌 BE 정규화 projection을 받는다. 모델 upsert와 집계 상태를 트랜잭션으로 저장한다. null 모델은 upsert하지 않아 기존 결과를 유지한다.
-- `findWithModelResults(id)`: 기존 메타데이터/레거시 결과와 모델별 결과·요약 필드 조회. HTTP 조회 API가 아니며 이후 호출자가 인증·소유권·만료를 확인해야 한다.
+- `findWithModelResults(id)`: 기존 메타데이터/레거시 결과와 모델별 결과·요약 필드 조회. #89 GET API에서 재사용하며 기존 사용자 정책·소유권·만료를 확인한 뒤 공개 DTO로 변환한다.
 - imageResultStatus는 최근 전달한 AI 응답의 집계 상태이고 modelResults에는 이전 요청에서 보존된 모델 결과도 있을 수 있다. 재시도·다중 실행 집계 정책은 추후 합의한다.
 - `saveSummary(id, value)`: null(미생성), PENDING(작업 시작), COMPLETED, FAILED를 구분한다. Gemini 호출/자동 요약/큐/재시도는 구현하지 않았다.
 - Mock 흐름에서 부분 성공은 BE COMPLETED + AI PARTIAL_FAILED, 모두 실패는 BE FAILED + AI FAILED로 저장한다.
@@ -235,7 +235,7 @@ generation/manipulation/rawScore/localization/imageResultStatus를 POST 응답�
 - aiGenerationScore: 성공한 CuRe displayScore만 사용. 보류/실패면 null.
 - reasons/modelVersion: 성공한 CuRe의 근거/버전만 사용. CuRe 실패면 null.
 - aiRiskLevel: 정책 미확정으로 null. TruFor 점수와 합산하거나 사기 위험도로 변환하지 않는다.
-- TruFor의 상세 결과는 DB 모델별 조회 메서드로 확인한다. 새 GET API는 구현하지 않는다.
+- TruFor의 상세 결과는 DB 모델별 조회 메서드와 #89 GET 상세 조회 API로 확인한다.
 - 기존 레거시 Provider 검증·저장 경로는 보존한다. v1 응답은 기존 validator와 명시적 projection을 거친다.
 
 ### 초안과 최종 명세 구분
@@ -378,7 +378,7 @@ FE는 POST의 analysisId로 이 API를 폴링한다. PENDING이면 간격을 두
 
 `FOR UPDATE SKIP LOCKED`로 원자적으로 선점한다. lease는 Gemini timeout+30초이며 재시작 시 만료된 RUNNING 작업을 다시 선점한다. leaseToken과 유효기간이 일치하는 Worker만 job 및 Analysis 요약을 같은 트랜잭션에서 저장한다. 이미 완료한 요약은 덮어쓰지 않는다. 5xx/네트워크/timeout은 제한적으로 재시도하고(429는 아래 별도 정책 적용) 설정/인증/형식/모순 오류는 즉시 실패한다. 종료 시 호출을 abort하고 작업을 재예약한다. 강제 종료나 DB 장애는 lease 복구로 처리한다. 여러 프로세스는 개별 동시성 제한을 가지며 전체 호출 수는 프로세스 수에 비례한다.
 
-Gemini에는 DB 모델별 상태·판정·표시점수·근거·제한사항과 기존 calculateOverallResult 대표 판정만 전달한다. 이미지/경로/localization/rawScore/사용자·추적 ID/토큰은 필드에서 제외한다. 근거·제한사항의 흔한 이메일/전화/URL/Bearer 패턴은 가리고 길이와 개수를 제한한다. 외부 텍스트를 명령으로 취급하지 않는 system instruction 및 JSON 출력 검증을 사용한다. 판정 echo, 문장 수·길이·한국어 및 명백한 판정 모순을 검사하지만 자연어 사실성이나 임의의 개인정보 패턴을 완전하게 보장하는 검사는 아니다. 공급자 근거에는 개인정보를 넣지 않는 계약이 필요하다.
+Gemini에는 DB 모델별 상태·판정·표시점수와 기존 calculateOverallResult 대표 판정만 전달한다. 이미지/경로/localization/rawScore/사용자·추적 ID/토큰과 자유서술 근거·제한사항은 입력에서 제외한다. 근거에 포함될 수 있는 내부 ID·토큰·API Key의 유출을 막기 위해 자유서술 텍스트를 전송하지 않는다. system instruction 및 JSON 출력 검증을 사용한다. 판정 echo, 문장 수·길이·한국어 및 명백한 판정 모순을 검사하지만 자연어 사실성이나 임의의 개인정보 패턴을 완전하게 보장하는 검사는 아니다. 공급자 근거에는 개인정보를 넣지 않는 계약이 필요하다.
 
 요약 작업은 모델 결과·이미지 처리 상태를 변경하지 않는다. 요약은 기존 expiresAt을 따른다. 만료된 기록 조회는 404, 처리 전 만료 작업은 FAILED가 된다. 기존 자동 삭제 미구현 정책은 유지한다. Gemini 요청은 재시작/lease 만료로 중복 호출될 수 있지만 DB 완료 저장은 멱등적이다. abort는 외부 서비스 처리/과금 중단을 보장하지 않는다.
 
@@ -422,3 +422,158 @@ DB 선점 SQL은 `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'`로 TIMESTAMP(3) 예약/l
 `SUMMARY_CONTRADICTION` 로그의 `diagnostic`에는 고정된 모델/조건 코드만 기록한다. 예: `generation:OPPOSITE_DECISION`, `manipulation:MISSING_SUSPICION`, `generation:MISSING_UNCERTAINTY`, `manipulation:MISSING_FAILURE`, `manipulation:MISSING_NOT_REQUESTED`, `generation:MISSING_MODEL_EXPLANATION`. 요약 원문·사용자 데이터는 출력하지 않는다. 기존 DB 오류 코드와 공개 API는 유지한다.
 
 생성/인공지능/AI로/CuRe, 변조/조작/합성/TruFor 표현을 인식하고 관련 절 전체를 검사한다. 의심/가능성이 있음/징후·흔적 감지, 판단 어려움/불분명/판단할 수 없음, 신호·흔적 없음/발견되지 않음 등 동의어를 허용한다. FAILED는 실제 분석 실패 설명을, 미요청은 미분석 설명을 요구한다. 뒤 문장에서 판정을 뒤집거나 실패를 정상 결과로 서술하면 차단한다. 프롬프트는 두 모델을 주어가 명확한 별도 문장으로 설명하도록 요청한다. 규칙 기반 검증이므로 모든 자연어 표현을 이해하는 검증은 아니며, 허용되지 않은 표현은 원문 대신 diagnostic으로 확인해 회귀 테스트와 함께 보완한다.
+
+
+## Issue #89 분석 결과 조회 및 비동기 요약 마무리
+
+### GET `/api/analysis/{analysisId}`
+
+analysisId는 path UUID다. 기존 개발용 인증 상태를 유지하며 요청 사용자 또는 임시 사용자
+`development-user`의 보관 기한 내 결과만 조회한다.
+200 ANALYSIS200, 잘못된 UUID는 400 COMMON400, 없는/다른 사용자/만료된 기록은 404 COMMON404,
+DB 오류는 500 COMMON500으로 기존 공통 envelope를 사용한다.
+
+```bash
+curl http://localhost:3000/api/analysis/00000000-0000-4000-8000-000000000001
+```
+
+```json
+{
+  "isSuccess": true,
+  "code": "ANALYSIS200",
+  "message": "분석 결과 조회에 성공했습니다.",
+  "result": {
+    "analysisId": "00000000-0000-4000-8000-000000000001",
+    "type": "IMAGE",
+    "status": "COMPLETED",
+    "aiGenerationScore": 80,
+    "aiRiskLevel": null,
+    "reasons": [{ "description": "[MOCK] CuRe 고정 가상 분석 근거" }],
+    "modelVersion": "CuRe-mock-v0.2",
+    "errorCode": null,
+    "createdAt": "2026-10-15T00:00:00.000Z",
+    "completedAt": "2026-10-15T00:00:01.000Z",
+    "expiresAt": "2026-10-16T00:00:00.000Z",
+    "models": {
+      "status": "COMPLETED",
+      "generation": {
+        "status": "SUCCEEDED",
+        "modelName": "CuRe",
+        "modelVersion": "CuRe-mock-v0.2",
+        "policyVersion": "mock-pilot-v0.2",
+        "displayScore": 80,
+        "decision": "AI_GENERATED_SUSPECTED",
+        "reasons": [{ "description": "[MOCK] CuRe 고정 가상 분석 근거" }],
+        "limitations": ["MOCK 응답이며 실제 AI 분석 결과가 아닙니다."],
+        "errorCode": null,
+        "retryable": null
+      },
+      "manipulation": null
+    },
+    "overallResult": {
+      "decision": "GENERATION_OR_MANIPULATION_SUSPECTED",
+      "decisionLabel": "생성·변조 의심",
+      "policyVersion": "image-overall-v1",
+      "suspectedKinds": ["generation"],
+      "uncertainKinds": ["manipulation"]
+    }
+  }
+}
+```
+
+예시는 CuRe만 저장된 결과다. 현재 공개 POST는 두 모델을 요청하며 TruFor도 같은 projection으로 반환한다.
+기존 POST result의 모든 필드를 유지하고 기존 ImageModelsPublicResultDto를 models로 재사용한다.
+overallResult는 기존 정책·enum으로 저장된 모델 판정에서 재계산하며 평균/합산 점수를 만들지 않는다.
+레거시/모델 결과 미저장 분석은 models=null, overallResult는 INCONCLUSIVE다.
+내부 DB 모델 ID·userId·requestHash·rawScore·localization은 공개하지 않는다.
+진행 중 및 실패한 분석도 보관 기한 내에서 조회할 수 있다.
+Prisma 스키마 및 migration 파일 변경이나 배포 DB migration 적용은 없다.
+
+### 요약 처리 및 #98 역할 분리
+
+분석 결과 트랜잭션 완료 → 요약 작업 및 summaryStatus=PENDING 별도 등록 → POST 202 반환.
+Gemini 네트워크 호출은 Worker에서 실행하며 한국어 2~4문장과 판정 일치 검증 후
+summaryStatus=COMPLETED, summary, summaryModel, summarizedAt을 저장한다.
+영구 오류 또는 재시도 소진 시 FAILED와 null 요약 필드를 저장한다.
+기존 503/504·네트워크·타임아웃 재시도, 횟수 상한·지연·jitter 환경변수 정책을 유지한다.
+작업 PK와 원자적 claim, leaseToken fencing으로 중복 완료를 차단하고 서버 재시작 시 만료 lease를 회수한다.
+Gemini 실패는 모델 결과·분석 상태·errorCode·completedAt을 변경하지 않는다.
+
+분석 상세 GET에는 요약 데이터를 추가하지 않는다. 기존 `GET /api/analysis/{analysisId}/summary`는
+삭제하지 않고 비동기 요약 상태 폴링 용도로 유지한다.
+이 경로의 COMPLETED summary 응답은 #98의 요약본 상세 조회와 기능이 겹친다.
+#98은 요약 기록 목록·요약본 상세·최근 3건 API, 페이지네이션/정렬/소유권 및 보관 정책을 정하고,
+기존 /summary와의 호환·재사용·이관 방식을 확정해야 한다. 이번 작업에는 History API를 추가하지 않는다.
+
+### 검증
+
+- 새 상세 GET: 성공·모델별 결과·기존 필드·내부 데이터 비노출·UUID·404·DB 오류·진행/실패 상태·Swagger.
+- 격리 PostgreSQL: POST→Prisma 저장→GET 결과 일치, 요약 PENDING→COMPLETED/FAILED,
+  실제 Client 검증 경로를 통한 503 및 timeout, 요약 실패 후 분석 GET 응답 불변.
+- 기존 테스트: 503/504 재시도와 소진·네트워크·중복 선점/완료·등록 복구·서버 재시작 lease 회수.
+- Gemini 외부 통신은 테스트 대역으로 대체하며 실제 유료 서비스는 호출하지 않는다.
+
+
+## Issue #97 위험도·근거·대응 안내 정규화
+
+#89 GET 상세 조회·Gemini 비동기 요약을 유지한다. POST 필드와 상태 코드는 유지하고,
+합의한 신규 필드 `GET result.guides: string[]`만 추가한다.
+모델 이름은 기존 modelName(CuRe/TruFor)을 유지하며 model 별칭은 추가하지 않는다.
+종합 판정의 기존 enum도 유지한다. FE에서 SUSPECTED는 아래 기존 의심 판정값을 의미한다.
+
+| FE 의미 | overallResult.decision | 조건 |
+| --- | --- | --- |
+| SUSPECTED | GENERATION_OR_MANIPULATION_SUSPECTED | 성공 모델 중 하나라도 의심 |
+| INCONCLUSIVE | INCONCLUSIVE | 의심 신호 없이 실패·미요청·판단 불가 모델 존재 |
+| NO_CLEAR_SIGNAL | NO_CLEAR_SIGNAL | 두 모델 모두 성공하고 신호 없음 |
+
+모델 점수를 평균·합산하지 않는다. overallResult는 생성·변조 신호의 종합 판정이며
+aiRiskLevel은 기존 Provider의 별도 위험도 필드다. 위험 등급 정책 미확정 시 null을 유지한다.
+AI 생성 가능성과 displayScore/aiGenerationScore는 사기 확률이 아니다.
+null 점수는 0점이 아니며 null 위험도는 안전 판정이 아니다.
+
+POST/GET 기존 reasons는 null을 유지하되, 배열이면 빈 항목과 중복을 제거한다.
+GET 모델별 reasons/limitations는 없으면 []로 반환하고 공백을 정리한 뒤 중복을 제거한다.
+같은 문구라도 다른 모델의 근거는 각 모델에 유지하며 한 모델의 점수·근거를 다른 모델에 합치지 않는다.
+모델 실패 시 status/errorCode를 보존하고 decision/displayScore=null, reasons=[]로 표시한다.
+limitations는 제공된 한계를 정리해 유지하며 빈 배열을 분석 한계가 없다는 뜻으로 표시하지 않는다.
+원본 저장 데이터와 Provider 응답·내부 AI 판정 규칙은 변경하지 않는다.
+
+### GET 표시용 응답 예시 (result 일부)
+
+```json
+{
+  "aiRiskLevel": null,
+  "overallResult": {
+    "decision": "GENERATION_OR_MANIPULATION_SUSPECTED",
+    "decisionLabel": "생성·변조 의심",
+    "policyVersion": "image-overall-v1",
+    "suspectedKinds": ["generation"],
+    "uncertainKinds": []
+  },
+  "guides": [
+    "사진이나 정보의 출처를 확인해 주세요.",
+    "공유하기 전에 다른 자료와 비교해 주세요.",
+    "관련 기관의 공식 홈페이지나 전화로 확인해 주세요."
+  ]
+}
+```
+
+INCONCLUSIVE 안내: “현재 분석만으로는 판단하기 어렵습니다.”,
+“원본 사진이나 추가 자료를 확인해 주세요.”
+NO_CLEAR_SIGNAL 안내: “뚜렷한 의심 신호는 발견되지 않았습니다.”,
+“원본 사진이거나 안전한 정보라는 뜻은 아닙니다.”
+실패 모델이 있으면 AI 생성/이미지 변조 분석 실패와 판단할 수 없다는 안내를 덧붙인다.
+판단 근거와 대응 안내는 구분하며 만들어 낸 근거를 reasons에 넣지 않는다.
+
+Gemini summaryStatus(PENDING/COMPLETED/FAILED)는 요약 작업 상태다.
+모델 실행 status와 overallResult 및 guides와 독립적이며 요약 실패를 위험 판정으로 표시하지 않는다.
+분석 상세에는 summaryStatus를 추가하지 않고 기존 /summary를 유지한다.
+
+### FE 합의가 필요한 항목
+
+- modelName과 기존 의심 enum을 그대로 사용한다. model 또는 SUSPECTED로 API 이름을 바꾸려면 별도 계약이 필요하다.
+- aiRiskLevel 등급·색상·경고 수준 매핑은 미확정이다. 기존 값을 임의로 SAFE/CAUTION/DANGER로 변환하지 않는다.
+- null 점수는 미제공, [] 근거는 추가 근거 없음으로 표시하며 안전을 의미하지 않는다.
+- guides는 GET 전용 추가 필드다. POST 후 GET으로 상세·대응 안내를 받고 요약 상태는 /summary로 조회한다.
+- 고령층 대상 문구의 최종 UX 검토와 표시 순서는 FE/기획에서 확인한다.

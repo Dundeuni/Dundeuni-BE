@@ -229,15 +229,16 @@ describe('Gemini structured client and privacy', () => {
       summaryInput(values as AnalysisModelResult[]).overallResult.decision,
     ).toBe(expected);
   });
-  it('whitelists only model fields and redacts common free-text identifiers', () => {
+  it('excludes all free text and identifiers from the Gemini payload', () => {
     const dirty = {
       ...rows[0],
       reasons: [
         {
           description:
-            'test@example.com https://secret/path Bearer secret 010-1234-5678',
+            'test@example.com https://secret/path Bearer secret 010-1234-5678 internal-id sk-private API_KEY=private',
         },
       ],
+      limitations: ['internal-id sk-private API_KEY=private'],
       userId: 'private-user',
       rawScore: 1,
       localization: 'secret-heatmap',
@@ -254,6 +255,11 @@ describe('Gemini structured client and privacy', () => {
       'localization',
       'test@example.com',
       '010-1234',
+      'internal-id',
+      'sk-private',
+      'API_KEY',
+      'reasons',
+      'limitations',
     ])
       expect(text).not.toContain(forbidden);
   });

@@ -8,6 +8,12 @@ import {
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { PNG } from 'pngjs';
+import { AppModule } from '../src/app.module';
+import { IMAGE_ANALYSIS_PROVIDER } from '../src/domains/analysis/image-analysis.service';
 import { parse } from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { calculateOverallResult } from '../src/domains/analysis/image-analysis-policy';
@@ -24,6 +30,7 @@ const dbDescribe = process.env.V1_DB_TEST === '1' ? describe : describe.skip;
 dbDescribe('V1 Prisma storage in isolated local schema', () => {
   const schema = `v1_test_${randomUUID().replaceAll('-', '')}`;
   let prisma: PrismaClient;
+  let app: INestApplication;
   let repository: AnalysisRepository;
   let connection: URL;
   function sql(text: string) {
@@ -70,8 +77,38 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     connection.searchParams.set('schema', schema);
     prisma = new PrismaClient({ datasourceUrl: connection.toString() });
     repository = new AnalysisRepository(prisma as unknown as PrismaService);
+    const module = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(ConfigService)
+      .useValue(
+        new ConfigService({
+          ANALYSIS_MAX_FILE_BYTES: '1024',
+          ANALYSIS_RETENTION_SECONDS: '86400',
+          AI_REQUEST_TIMEOUT_MS: '1000',
+          GEMINI_SUMMARY_ENABLED: 'true',
+        }),
+      )
+      .overrideProvider(PrismaService)
+      .useValue(prisma)
+      .overrideProvider(AnalysisUsageService)
+      .useValue({
+        reserveAiUsage: async () => {},
+        releaseAiUsage: async () => {},
+      })
+      .overrideProvider(IMAGE_ANALYSIS_PROVIDER)
+      .useValue(new MockImageAnalysisProvider('BOTH_SUCCESS'))
+      .overrideProvider(AnalysisSummaryWorker)
+      .useValue({})
+      .compile();
+    app = module.createNestApplication();
+    app.setGlobalPrefix('api');
+    app.useGlobalPipes(
+      new ValidationPipe({ transform: true, whitelist: true }),
+    );
+    await app.init();
+    await app.listen(0, '127.0.0.1');
   });
   afterAll(async () => {
+    if (app) await app.close();
     if (prisma) await prisma.$disconnect();
     if (connection) sql(`DROP SCHEMA IF EXISTS "${schema}" CASCADE;`);
   });
@@ -120,7 +157,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       where: { analysisId: id },
       data: { leaseUntil: new Date(0) },
     });
-    const recovered = await jobRepo.claim();
+    const recovered = await jobs().claim(); // New instance after a simulated process crash.
     expect(recovered?.attempts).toBe(2);
     expect(
       await jobRepo.finish(first, { summary: 'stale', model: 'test' }),
@@ -591,6 +628,116 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       uncertainKinds: [],
     });
   });
+  it.each(['COMPLETED', 'FAILED', 'TIMEOUT'] as const)(
+    'runs POST→stored analysis GET→asynchronous Gemini %s without changing image results',
+    async (outcome) => {
+      const created = await request(app.getHttpServer())
+        .post('/api/analysis')
+        .field('type', 'IMAGE')
+        .attach(
+          'file',
+          PNG.sync.write(new PNG({ width: 1, height: 1 })),
+          'sample.png',
+        )
+        .expect(202);
+      const id = created.body.result.analysisId;
+      const before = (await repository.findWithModelResults(id))!;
+      expect(before.summaryStatus).toBe('PENDING');
+      expect(
+        await prisma.analysisSummaryJob.count({ where: { analysisId: id } }),
+      ).toBe(1);
+      const detail = await request(app.getHttpServer())
+        .get(`/api/analysis/${id}`)
+        .expect(200);
+      expect(detail.body.result).toMatchObject(created.body.result);
+      expect(detail.body.result.models.generation).toMatchObject({
+        modelName: 'CuRe',
+        displayScore: 80,
+      });
+      expect(detail.body.result.models.manipulation).toMatchObject({
+        modelName: 'TruFor',
+        displayScore: 80,
+      });
+      expect(detail.body.result.overallResult.decision).toBe(
+        'GENERATION_OR_MANIPULATION_SUSPECTED',
+      );
+      const pending = await request(app.getHttpServer())
+        .get(`/api/analysis/${id}/summary`)
+        .expect(200);
+      expect(pending.body.result).toMatchObject({
+        summaryStatus: 'PENDING',
+        summary: null,
+      });
+      const config = new ConfigService({
+        GEMINI_API_KEY: 'test-only',
+        GEMINI_MODEL: 'gemini-test',
+        GEMINI_TIMEOUT_MS: '5',
+        GEMINI_SUMMARY_MAX_ATTEMPTS: '1',
+      });
+      const client = new GeminiSummaryClient(config);
+      const text =
+        'AI 생성과 관련된 의심 신호가 감지되었습니다. 이미지 변조와 관련된 의심 신호가 감지되었습니다. 출처와 원본을 확인하는 것이 좋습니다.';
+      const input = summaryInput(before.modelResults);
+      const adapter = jest.spyOn(client, 'request');
+      if (outcome === 'COMPLETED')
+        adapter.mockResolvedValue(
+          JSON.stringify({
+            summary: text,
+            generationDecision: input.generation!.decision,
+            manipulationDecision: input.manipulation!.decision,
+            overallDecision: input.overallResult.decision,
+          }),
+        );
+      else if (outcome === 'TIMEOUT')
+        adapter.mockImplementation(() => new Promise(() => {}));
+      else adapter.mockRejectedValue({ status: 503 });
+      const worker = new AnalysisSummaryWorker(
+        new AnalysisSummaryRepository(
+          prisma as unknown as PrismaService,
+          config,
+        ),
+        client,
+        config,
+      );
+      // Process only the already-durable job: no real network or background polling in tests.
+      await worker.processOne();
+      const after = (await repository.findWithModelResults(id))!;
+      expect(after.summaryStatus).toBe(
+        outcome === 'COMPLETED' ? 'COMPLETED' : 'FAILED',
+      );
+      expect(after.summary).toBe(outcome === 'COMPLETED' ? text : null);
+      expect(after.summaryModel).toBe(
+        outcome === 'COMPLETED' ? 'gemini-test' : null,
+      );
+      expect(after.summarizedAt instanceof Date).toBe(outcome === 'COMPLETED');
+      expect(after.modelResults).toEqual(before.modelResults);
+      expect(after.status).toBe(before.status);
+      expect(after.errorCode).toBe(before.errorCode);
+      expect(after.completedAt).toEqual(before.completedAt);
+      expect(
+        (
+          await request(app.getHttpServer())
+            .get(`/api/analysis/${id}`)
+            .expect(200)
+        ).body,
+      ).toEqual(detail.body);
+      const summary = await request(app.getHttpServer())
+        .get(`/api/analysis/${id}/summary`)
+        .expect(200);
+      expect(summary.body.result.summaryStatus).toBe(after.summaryStatus);
+      expect(summary.body.result.summary).toBe(after.summary);
+      const payload = adapter.mock.calls[0][2];
+      expect(Object.keys(payload.generation!).sort()).toEqual([
+        'decision',
+        'displayScore',
+        'status',
+      ]);
+      expect(JSON.stringify(payload)).not.toMatch(
+        /analysisId|rawScore|localization|test-only|reasons|limitations/,
+      );
+      await worker.onModuleDestroy();
+    },
+  );
   it('migration chain matches the Prisma schema', () => {
     const diff = spawnSync(
       process.execPath,
