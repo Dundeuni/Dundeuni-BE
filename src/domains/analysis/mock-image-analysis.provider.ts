@@ -20,6 +20,8 @@ import {
 
 export const MOCK_SCENARIOS = [
   'BOTH_SUCCESS',
+  'GENERATION_SUSPECTED',
+  'MANIPULATION_SUSPECTED',
   'GENERATION_FAILED',
   'MANIPULATION_FAILED',
   'BOTH_FAILED',
@@ -100,7 +102,9 @@ export class MockImageAnalysisProvider implements ImageAnalysisProvider {
   ): AiModelResultV02 {
     const kind = name === 'CuRe' ? 'generation' : 'manipulation';
     const score =
-      this.scenario === 'NO_CLEAR_SIGNAL'
+      this.scenario === 'NO_CLEAR_SIGNAL' ||
+      (this.scenario === 'GENERATION_SUSPECTED' && name === 'TruFor') ||
+      (this.scenario === 'MANIPULATION_SUSPECTED' && name === 'CuRe')
         ? name === 'CuRe'
           ? 0.000001
           : 0.1

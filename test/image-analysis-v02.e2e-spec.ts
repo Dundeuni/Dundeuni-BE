@@ -30,6 +30,20 @@ describe('CuRe + TruFor v0.2', () => {
       ['generation', 'manipulation'],
       [],
     ],
+    [
+      'GENERATION_SUSPECTED',
+      'COMPLETED',
+      'GENERATION_OR_MANIPULATION_SUSPECTED',
+      ['generation'],
+      [],
+    ],
+    [
+      'MANIPULATION_SUSPECTED',
+      'COMPLETED',
+      'GENERATION_OR_MANIPULATION_SUSPECTED',
+      ['manipulation'],
+      [],
+    ],
     ['NO_CLEAR_SIGNAL', 'COMPLETED', 'NO_CLEAR_SIGNAL', [], []],
     [
       'INCONCLUSIVE',
@@ -130,6 +144,17 @@ describe('CuRe + TruFor v0.2', () => {
       expect(pilotDisplayScore(score, decision)).toBe(display);
     },
   );
+  it('does not treat a failed or unrequested model as a clear signal', () => {
+    const clear = {
+      status: 'SUCCEEDED' as const,
+      decision: 'NO_CLEAR_GENERATION_SIGNAL' as const,
+    };
+    const failed = { status: 'FAILED' as const, decision: null };
+    expect(calculateOverallResult(clear, failed).decision).toBe('INCONCLUSIVE');
+    expect(calculateOverallResult(failed, clear).decision).toBe('INCONCLUSIVE');
+    expect(calculateOverallResult(clear, null).decision).toBe('INCONCLUSIVE');
+    expect(calculateOverallResult(null, clear).decision).toBe('INCONCLUSIVE');
+  });
   it('validates an actually decodable PNG and nullable localization', async () => {
     const response = await new MockImageAnalysisProvider(
       'LOCALIZATION',

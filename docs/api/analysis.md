@@ -329,3 +329,48 @@ Mock 요청에서도 analysisId/elementId UUID, requestId UUID v4, 미래 UTC RF
 기존 공개 POST 응답·인증 임시 비활성화·development-user·멱등성 제거 상태 유지.
 기존 Prisma 스키마와 migration 변경 없음. 모델별 저장 whitelist 및 UNIQUE/부분 성공 보존 유지.
 실제 HTTP/추론/Gemini/FE 확장/heatmap 저장/SCREEN crop/큐·재시도/quota 구현 없음.
+
+
+## Issue #94 POST→Mock→DB 저장·Repository 재조회 검증
+
+검증 범위는 `POST /api/analysis` → 업로드/DTO 검증 → QUEUED 생성 → Usage 예약
+→ ANALYZING → CuRe·TruFor Mock 호출 → v0.2 응답 및 요청 ID/모델 대응 검증
+→ 저장 projection → 모델 upsert·Analysis 상태·completedAt의 트랜잭션 저장
+→ 기존 `AnalysisRepository.findWithModelResults(id)` 재조회다.
+GET API·새 Controller·Gemini 요약·History API·Prisma 스키마/migration은 추가하거나 변경하지 않는다.
+기존 POST `202 / ANALYSIS202`와 공개 응답 필드를 유지한다.
+
+Mock 시나리오에 GENERATION_SUSPECTED(CuRe만 의심), MANIPULATION_SUSPECTED(TruFor만 의심)를 추가했다.
+기존 시나리오와 저장/판정 구현은 검증 결과 정상으로 유지한다.
+성공한 모델 중 의심이 있으면 기존 내부 판정 GENERATION_OR_MANIPULATION_SUSPECTED,
+의심 없이 실패·미요청·판단 불가가 있으면 INCONCLUSIVE,
+두 모델 모두 성공하고 신호가 없으면 NO_CLEAR_SIGNAL이다. 점수를 평균·합산하지 않는다.
+종합 판정은 별도 DB 컬럼에 저장하지 않으며 재조회한 모델 결과로 계산해 Mock 응답과 비교한다.
+모델 이름은 기존 필드 modelName(CuRe/TruFor)을 사용한다.
+
+부분 실패는 성공 모델과 실패 모델 모두 저장하고 POST 202, imageResultStatus=PARTIAL_FAILED다.
+전체 모델 실패는 두 실패 모델 결과와 FAILED/ANALYSIS503/completedAt을 저장하고 POST 503이다.
+타임아웃은 모델 결과 없이 FAILED/ANALYSIS503/completedAt을 저장하고 POST 503이며 호출을 abort한다.
+rawScore/localization은 저장 projection 및 POST 공개 응답에서 제외한다.
+`(analysisId, kind)` UNIQUE와 upsert로 반복 저장 시 행 수와 모델 ID를 유지한다.
+
+### 검증 방법
+
+`V1_DB_TEST=1 npm test -- --runInBand`는 localhost PostgreSQL 임시 스키마에서 실제 POST와
+Prisma 저장·Repository 재조회를 실행하고 종료 시 임시 스키마를 삭제한다.
+두 모델 정상/각 모델만 의심/모두 의심/신호 없음/각 모델 실패/전체 실패/판단 불가/타임아웃,
+반복 저장과 최신 값 재조회, 없는 ID의 null 반환을 검증한다.
+모델별 analysisId·modelName·status·decision·displayScore·reasons·limitations·오류 정보와
+Analysis 상태·completedAt을 실제 Mock 반환 값 및 POST 응답과 비교한다.
+기존 migration·DB 제약·트랜잭션 롤백·부분 재요청 결과 보존 테스트도 유지한다.
+실제 AI 서버는 호출하지 않는다. GET API 미구현은 #94 실패 사유가 아니다.
+
+### #89에서 처리할 조회 API 항목
+
+- 분석 상세 GET Endpoint, 공개 응답 DTO 및 Swagger 계약 정의·구현.
+- 인증 사용자와 분석 소유권 검증, 없는 ID 및 잘못된 ID의 오류 계약.
+- 모델별 저장 결과와 종합 판정의 공개 형식, 내부 의심 판정의 공개 enum 매핑 확정.
+- rawScore·원본 이미지·내부 식별자 비노출, 레거시/진행 중/실패/타임아웃 데이터 조회 처리.
+- 보관 기한과 접근 정책, 조회 API 통합 테스트.
+
+위 목록은 #94에서 확인한 조회 API 후속 항목이며 #89의 기존 명세와 대조해 확정해야 한다.
