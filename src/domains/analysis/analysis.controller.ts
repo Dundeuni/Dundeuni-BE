@@ -26,6 +26,18 @@ import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
 import { AnalysisService } from './analysis.service';
 
+function errorSchema(code: string) {
+  return {
+    type: 'object',
+    properties: {
+      isSuccess: { type: 'boolean', example: false },
+      code: { type: 'string', example: code },
+      message: { type: 'string' },
+      result: { type: 'object', nullable: true, example: null },
+    },
+  };
+}
+
 @ApiExtraModels(ImageModelsPublicResultDto)
 @ApiTags('Analysis')
 // @ApiBearerAuth()
@@ -41,7 +53,7 @@ export class AnalysisController {
   @ApiOperation({
     summary: '이미지 분석 요청 생성',
     description:
-      'P0 유형 IMAGE/TEXT/URL 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. 실제 Provider 미연동 시 503.',
+      '요청 유형 SCREEN/IMAGE/TEXT 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. 실제 Provider 미연동 시 503.',
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -52,7 +64,7 @@ export class AnalysisController {
         type: {
           type: 'string',
           enum: ['IMAGE'],
-          description: '현재 IMAGE만 허용. TEXT/URL 미구현.',
+          description: '현재 IMAGE만 허용. SCREEN/TEXT 미구현으로 400 반환.',
         },
         file: {
           type: 'string',
@@ -75,7 +87,7 @@ export class AnalysisController {
           type: 'object',
           properties: {
             analysisId: { type: 'string', format: 'uuid' },
-            type: { type: 'string', enum: ['IMAGE', 'TEXT', 'URL'] },
+            type: { type: 'string', enum: ['IMAGE'] },
             status: {
               type: 'string',
               enum: ['QUEUED', 'ANALYZING', 'COMPLETED', 'FAILED'],
@@ -115,11 +127,21 @@ export class AnalysisController {
   })
   @ApiResponse({
     status: 400,
-    description: 'COMMON400: type/file 누락, TEXT/URL 또는 잘못된 요청',
+    schema: errorSchema('COMMON400'),
+    description:
+      'COMMON400: type/file 누락, 빈 파일, 손상 이미지, SCREEN/TEXT 또는 잘못된 요청',
   })
   // @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
-  @ApiResponse({ status: 413, description: 'COMMON413: 이미지 크기 초과' })
-  @ApiResponse({ status: 415, description: 'COMMON415: 지원하지 않는 이미지' })
+  @ApiResponse({
+    status: 413,
+    description: 'COMMON413: 이미지 크기 초과',
+    schema: errorSchema('COMMON413'),
+  })
+  @ApiResponse({
+    status: 415,
+    description: 'COMMON415: MIME/확장자/시그니처 불일치',
+    schema: errorSchema('COMMON415'),
+  })
   @ApiResponse({
     status: 429,
     description: 'USAGE429: 이용량 초과 (Usage 연동 예정)',

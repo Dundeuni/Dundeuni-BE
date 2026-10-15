@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { Analysis } from '@prisma/client';
 import request from 'supertest';
+import sharp from 'sharp';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -13,7 +14,7 @@ import { AnalysisUsageService } from '../src/domains/analysis/analysis-usage.ser
 const secret = 'test-access-secret';
 const png = () =>
   Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=',
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC',
     'base64',
   );
 
@@ -71,7 +72,7 @@ describe('IMAGE analysis API', () => {
         get: (key: string) =>
           ({
             JWT_ACCESS_SECRET: secret,
-            ANALYSIS_MAX_FILE_BYTES: '128',
+            ANALYSIS_MAX_FILE_BYTES: '1024',
             ANALYSIS_RETENTION_SECONDS: '86400',
           })[key],
       })
@@ -171,8 +172,63 @@ describe('IMAGE analysis API', () => {
   it('rejects oversized uploads', async () => {
     await post()
       .field('type', 'IMAGE')
-      .attach('file', Buffer.alloc(129), 'sample.png')
+      .attach('file', Buffer.alloc(1025), 'sample.png')
       .expect(413);
+  });
+  it('accepts a decoded JPEG', async () => {
+    const jpeg = await sharp({
+      create: { width: 1, height: 1, channels: 3, background: 'white' },
+    })
+      .jpeg()
+      .toBuffer();
+    const response = await post()
+      .field('type', 'IMAGE')
+      .attach('file', jpeg, 'sample.jpeg')
+      .expect(202);
+    expect(response.body).toMatchObject({
+      isSuccess: true,
+      code: 'ANALYSIS202',
+    });
+  });
+  it.each([
+    ['empty', Buffer.alloc(0), 400],
+    ['PNG signature only', png().subarray(0, 8), 400],
+    ['truncated PNG', png().subarray(0, 45), 400],
+    ['JPEG signature only', Buffer.from([255, 216, 255, 224]), 400],
+    ['unsupported format', Buffer.from('GIF89a'), 415],
+  ])('rejects %s before any side effects', async (name, bytes, status) => {
+    const filename = String(name).includes('JPEG')
+      ? 'sample.jpg'
+      : 'sample.png';
+    const response = await post()
+      .field('type', 'IMAGE')
+      .attach('file', bytes as Buffer, filename)
+      .expect(status as number);
+    expect(response.body).toMatchObject({
+      isSuccess: false,
+      code: `COMMON${status}`,
+      result: null,
+    });
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(usage.reserveAiUsage).not.toHaveBeenCalled();
+    expect(provider.analyze).not.toHaveBeenCalled();
+  });
+  it('rejects duplicate type fields', async () => {
+    await post()
+      .field('type', 'IMAGE')
+      .field('type', 'IMAGE')
+      .attach('file', png(), 'sample.png')
+      .expect(400);
+  });
+  it('rejects an unexpected file field', async () => {
+    await post()
+      .field('type', 'IMAGE')
+      .attach('image', png(), 'sample.png')
+      .expect(400);
+  });
+  it('rejects TEXT with text while unimplemented', async () => {
+    await post().field('type', 'TEXT').field('text', 'example').expect(400);
+    expect(provider.analyze).not.toHaveBeenCalled();
   });
   it('uses the temporary user without an access token', async () => {
     await upload().expect(202);
