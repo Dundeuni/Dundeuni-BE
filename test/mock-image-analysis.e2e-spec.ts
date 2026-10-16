@@ -9,7 +9,7 @@ import {
   AiImageAnalysisRequestV1,
   ImageAnalysisService,
 } from '../src/domains/analysis/image-analysis.service';
-import { validateAiImageResponseV1 } from '../src/domains/analysis/image-analysis-v1.validator';
+import { validateAiImageResponseV02 } from '../src/domains/analysis/image-analysis-v1.validator';
 const file = {
   buffer: Buffer.from('test'),
   mimetype: 'image/png',
@@ -28,7 +28,7 @@ describe('Mock AI Provider', () => {
     'returns valid deterministic model data for %s',
     async (scenario) => {
       const provider = new MockImageAnalysisProvider(scenario);
-      const first = validateAiImageResponseV1(
+      const first = validateAiImageResponseV02(
         await provider.analyze(file, request()),
       );
       const second = await provider.analyze(file, request());
@@ -48,7 +48,7 @@ describe('Mock AI Provider', () => {
       'BOTH_SUCCESS',
     ).analyze(file, { ...request(), models: 'GENERATION' });
     expect(response.manipulation).toBeNull();
-    expect(response.requestedModels).toEqual(['GENERATION']);
+    expect(response.requestedModels).toEqual(['generation']);
   });
   it('bounds TIMEOUT by configured deadline', async () => {
     const service = new ImageAnalysisService(
@@ -90,18 +90,10 @@ describe('Mock AI Provider', () => {
       ),
     ).toThrow();
   });
-  it('reports unimplemented HTTP configuration clearly', async () => {
-    await expect(
-      selectImageAnalysisProvider(
-        new ConfigService({ AI_PROVIDER: 'http' }),
-      ).analyze(file, request()),
-    ).rejects.toMatchObject({
-      status: 503,
-      response: {
-        code: 'ANALYSIS503',
-        message: 'HTTP AI Provider가 아직 구현되지 않았습니다.',
-      },
-    });
+  it('requires explicit URL and token for the real transport', () => {
+    expect(() =>
+      selectImageAnalysisProvider(new ConfigService({ AI_PROVIDER: 'http' })),
+    ).toThrow('AI_SERVER_BASE_URL and AI_SERVICE_TOKEN');
   });
   it('rejects invalid v1 score even with HTTP success', async () => {
     const valid = await new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(

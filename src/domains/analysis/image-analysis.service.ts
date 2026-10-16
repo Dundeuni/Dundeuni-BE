@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import {
-  AiImageAnalysisResponseV1,
+  AiImageAnalysisResponseV02,
   ImageModelsPublicResultDto,
   ImageModelPublicResultDto,
 } from './image-analysis-v1.dto';
@@ -101,22 +102,29 @@ export class ImageAnalysisService {
           throw new Error('AI response context mismatch');
         const expected =
           request.models === 'ALL'
-            ? ['GENERATION', 'MANIPULATION']
-            : [request.models];
+            ? (['generation', 'manipulation'] as const)
+            : ([
+                request.models === 'GENERATION' ? 'generation' : 'manipulation',
+              ] as const);
         if (
           response.requestedModels.length !== expected.length ||
           !expected.every((name) => response.requestedModels.includes(name)) ||
-          expected.includes('GENERATION') !== (response.generation !== null) ||
-          expected.includes('MANIPULATION') !== (response.manipulation !== null)
+          expected.includes('generation') !== (response.generation !== null) ||
+          expected.includes('manipulation') !== (response.manipulation !== null)
         )
           throw new Error('AI requested model mismatch');
+        if (
+          response.analysisImage.inputSha256.toLowerCase() !==
+          createHash('sha256').update(file.buffer).digest('hex')
+        )
+          throw new Error('AI input hash mismatch');
         return {
           format: 'v1',
           completedAt: new Date(response.completedAt),
           models: {
             status: response.status,
-            generation: this.projectModel(response.generation),
-            manipulation: this.projectModel(response.manipulation),
+            generation: this.projectModel(response.generation, 'CuRe'),
+            manipulation: this.projectModel(response.manipulation, 'TruFor'),
           },
         };
       }
@@ -154,37 +162,21 @@ export class ImageAnalysisService {
     }
   }
   private projectModel(
-    model: AiImageAnalysisResponseV1['generation'],
+    model: AiImageAnalysisResponseV02['generation'],
+    name: 'CuRe' | 'TruFor',
   ): ImageModelPublicResultDto | null {
     if (!model) return null;
-    // Mock 초안의 명시적 projection. 최종 AI wire 구조가 확정되면 이 변환만 보완한다.
-    if (
-      !model.reasons.every(
-        (reason) =>
-          !!reason &&
-          typeof reason === 'object' &&
-          'description' in reason &&
-          typeof reason.description === 'string',
-      ) ||
-      !model.limitations.every((value) => typeof value === 'string')
-    )
-      throw new Error('Unsupported v1 draft detail shape');
-    const retryable = model.error?.retryable;
-    if (retryable !== undefined && typeof retryable !== 'boolean')
-      throw new Error('Invalid retryable');
     return {
       status: model.status,
-      modelName: model.modelName,
+      modelName: name,
       modelVersion: model.modelVersion,
       policyVersion: model.policyVersion,
       displayScore: model.displayScore,
       decision: model.decision,
-      reasons: model.reasons.map((reason) => ({
-        description: (reason as { description: string }).description,
-      })),
-      limitations: model.limitations as string[],
+      reasons: model.reasons.map((description) => ({ description })),
+      limitations: model.limitations,
       errorCode: model.errorCode,
-      retryable: typeof retryable === 'boolean' ? retryable : null,
+      retryable: model.error ? model.error.retryable : null,
     };
   }
 }

@@ -23,8 +23,11 @@ export function validateLocalization(
     !dimension(map.imageSize) ||
     !dimension(map.mapSize) ||
     Math.max(map.mapSize.width, map.mapSize.height) > 1024 ||
-    map.mapSize.width * map.imageSize.height !==
-      map.mapSize.height * map.imageSize.width ||
+    Math.abs(
+      map.mapSize.width * map.imageSize.height -
+        map.mapSize.height * map.imageSize.width,
+    ) >=
+      (map.imageSize.width + map.imageSize.height) / 2 ||
     typeof map.data !== 'string' ||
     map.data.length === 0 ||
     map.data.length > 1398104 ||
@@ -43,6 +46,7 @@ export function validateLocalization(
       .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
     bytes.readUInt32BE(8) !== 13 ||
     bytes.toString('ascii', 12, 16) !== 'IHDR' ||
+    ![0, 4].includes(bytes[25]) ||
     bytes.readUInt32BE(16) !== map.mapSize.width ||
     bytes.readUInt32BE(20) !== map.mapSize.height
   )

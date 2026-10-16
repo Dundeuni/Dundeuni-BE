@@ -200,11 +200,11 @@ AI_REQUEST_TIMEOUT_MS=30000
 
 - AI_PROVIDER 생략 또는 unavailable: 기존 미연동 Provider, 503.
 - mock: 개발/테스트 전용. NODE_ENV=production에서는 서버 시작 실패.
-- http: HTTP 미구현 설정 오류를 503 / ANALYSIS503으로 명확히 반환.
+- http: #10 HTTP 어댑터. 서버 URL·Bearer 토큰 필수. 실제 서버 검증은 AI팀 정보 수신 후 별도 진행.
 - 알 수 없는 모드·Mock 시나리오·잘못된 제한 시간: 서버 시작 시 설정 오류.
 - Mock 시작 로그에 MOCK/synthetic임을 표시한다. 이미지·토큰·민감한 입력은 기록하지 않는다.
 - 기존 AI_SERVER_BASE_URL을 재사용한다. AI_SERVER_URL을 중복 추가하지 않았다.
-- AI_SERVICE_TOKEN은 향후 HTTP용 예약 설정이며 현재 사용하지 않는다.
+- AI_SERVICE_TOKEN은 http 모드에서 Bearer 인증에 사용한다. mock에서는 사용하지 않는다.
 - Mock 시나리오는 서버 환경변수/테스트로만 선택한다. FE 요청에 시나리오 필드는 없다.
 
 ### 요청과 결과
@@ -374,3 +374,172 @@ Analysis 상태·completedAt을 실제 Mock 반환 값 및 POST 응답과 비교
 - 보관 기한과 접근 정책, 조회 API 통합 테스트.
 
 위 목록은 #94에서 확인한 조회 API 후속 항목이며 #89의 기존 명세와 대조해 확정해야 한다.
+
+
+## #10 AI 연동 — HTTP Provider 및 v0.2 wire 계약 보완
+
+이 절이 이전 Mock 초안의 wire 형식·HTTP 미구현 설명을 대체한다.
+사용자가 제공한 「AI 이미지 분석·입출력 명세서 v0.2」(AI 구현 d6b591b·API 명세 6eaf062 기준)에 맞춘다.
+실제 서버 주소·토큰이 확인되지 않아 실서버 호출은 하지 않았으며 로컬 HTTP Mock만 사용한다.
+
+### 전환과 전송
+
+- `AI_PROVIDER=mock`: 기존 개발용 Mock 유지. production Mock 금지 정책 유지.
+- `AI_PROVIDER=http`: 새 HttpImageAnalysisProvider. `AI_SERVER_BASE_URL`, `AI_SERVICE_TOKEN` 필수.
+  토큰이 없으면 시작 시 오류를 내며 무인증 호출로 대체하지 않는다.
+- 생략 또는 `unavailable`: 기존 미연동 503 유지. `real`이라는 새 모드명은 추가하지 않는다.
+- 설정 주소의 origin에 `POST /internal/v1/image-analyses`를 동기 multipart로 전송한다.
+- 헤더: `Authorization: Bearer <AI_SERVICE_TOKEN>`, `X-Request-ID: <UUID v4>`.
+- multipart 필드: `file`, `analysisId`, `elementId`, `sourceType`, `models`, `deadlineAt`.
+  requestId는 multipart에 중복 추가하지 않는다. 전송 파일명은 원래 사용자 파일명 대신 고정 이름을 사용한다.
+- sourceType은 IMAGE/SCREEN_CROP, models는 ALL/GENERATION/MANIPULATION이다.
+  기존 AnalysisService가 UUID·미래 UTC 마감·기본 ALL을 생성한다.
+- file은 JPEG/PNG, 10 MiB 이하이며 직렬화된 multipart 전체는 11 MiB 이하로 검사한다.
+  이미지 변 32~8192 px·총 16,000,000 px·단일 프레임·EXIF/RGB/알파 정규화는 AI 서버의 책임이다.
+  이 어댑터에서 별도의 이미지 재인코딩·crop을 하지 않는다. 입력 오류의 4xx를 처리한다.
+- HTTP redirect는 따르지 않아 Bearer·파일이 다른 주소로 자동 전송되지 않는다.
+
+### 응답 검증 및 기존 저장 구조 재사용
+
+| 항목 | v0.2 처리 |
+| --- | --- |
+| contractVersion | 문서 버전과 별개로 문자열 `1.0` |
+| requestedModels | 소문자 generation/manipulation, 순서·중복·선택 모델과 null 객체 대응 검증 |
+| rawScore | 성공 시 `{score: number}`(0~1), 실패 null. 숫자 단독 형식 거부 |
+| reasons | 문자열 배열 최대 5개, 판단 불가/실패는 빈 배열 |
+| limitations | 문자열 배열 최대 8개, 실패는 빈 배열 |
+| failed error | errorCode=error.code, message 문자열, retryable boolean 필수 |
+| analysisImage | inputSha256·정규화 크기·normalizationVersion 검증. 해시를 보낸 파일 바이트와 비교 |
+| model status/decision | 기존 파일럿 임계값과 displayScore 규칙 검증. 판단 불가도 SUCCEEDED |
+| 전체 상태/overallResult | 모델 실행 상태와 종합 판정 정책을 각각 검증. 점수 합산 없음 |
+| localization | 흑백 PNG·base64·1 MiB·긴 변 1024·이미지 크기 연계·CRC/디코딩 검증. 종횡비는 정수 반올림 허용 |
+| 내부 출력 | 모델 객체의 map/conf/imgsize 거부. rawScore/localization은 저장/공개 projection에서 제외 |
+
+v0.2에 모델 이름 필드가 필수로 제시되어 있지 않으므로 HTTP 응답 modelName을 요구하지 않는다.
+기존 Mock의 modelName은 호환성을 위해 유지하고, 제공될 경우 CuRe/TruFor 대응을 확인한다.
+DB 및 기존 공개 projection의 modelName은 generation=CuRe, manipulation=TruFor로 결정한다.
+문자열 reasons는 `{description}` 배열로 변환해 기존 Repository completeV1 경로로 저장한다.
+기존 POST 202/ANALYSIS202, 부분 실패 보존, 전체 모델 실패 503, DB 구조를 유지한다.
+
+### 오류·타임아웃·재시도 경계
+
+AI 정상 envelope는 HTTP 200만 허용한다. 모델 실패도 envelope 검증 후 기존 흐름대로 저장한다.
+요청 오류 400/422는 COMMON400, 413은 COMMON413, 415는 COMMON415로 처리한다.
+AI 서비스 인증 오류 401/403은 사용자 인증 오류가 아니므로 ANALYSIS503으로 처리한다.
+429/5xx/redirect·네트워크·timeout·JSON/envelope/컨텍스트 불일치도 기존 ANALYSIS503으로 처리한다.
+AI 오류 본문·서비스 토큰·내부 stack은 공개 응답이나 로그에 복사하지 않는다.
+
+기존 `AI_REQUEST_TIMEOUT_MS=30000` 기본값을 임의 변경하지 않는다.
+HTTP 어댑터와 기존 서비스는 설정 예산/미래 deadlineAt 중 빠른 마감에 맞춰 중단하며 AbortSignal을 전파한다.
+명세 개발 설정의 모델당 120초 + 순차 ALL + 응답 여유 1초는 최악 실행에 최소 241000ms가 필요하다.
+실서버 전환 전에 BE/AI/프록시/세션 TTL 예산을 합의하고 환경별 설정을 맞춰야 한다.
+
+HTTP 전송 자체의 자동 재시도는 없다. 실패 모델만 선택한 요청 컨텍스트는 지원하지만,
+재시도 스케줄·총 예산과 해시/정규화/정책 버전/현재 시도를 확인한 병합 orchestration은 추가하지 않았다.
+현재 DB projection은 normalizationVersion/입력 크기/현재 시도를 보관하지 않으므로,
+기존 단일 모델 upsert 보존을 완전한 v0.2 재시도 병합 검증으로 설명하지 않는다.
+이 기능은 별도 저장/수명 정책 합의가 필요하다. AI 내부 retry·캐시는 구현하지 않는다.
+
+### 검증 및 실서버 전환에 필요한 정보
+
+로컬 HTTP 서버로 정확한 endpoint·Bearer·추적 헤더·multipart 필드/파일 바이트와 응답 projection을 검증한다.
+추가 HTTP Mock 테스트는 상태코드별 오류 매핑·잘못된 envelope·네트워크·timeout·취소·설정 누락,
+v0.2 원점수/문자열 근거/메타데이터/지도 반올림 및 해시 불일치를 검증한다.
+기존 Mock→Service→Prisma 저장 회귀 테스트도 실행한다. .env는 변경하지 않는다.
+
+실서버 검증에 필요한 정보:
+
+1. AI팀이 확인한 실제 AI_SERVER_BASE_URL과 HTTP/HTTPS·네트워크 접근 방법.
+2. 유효한 AI_SERVICE_TOKEN(채팅·저장소 대신 서버 비밀 설정 또는 .env에 입력).
+3. 비민감 테스트 이미지와 사용 승인, 정상/실패/부분 실패 예상 결과.
+4. BE/AI/프록시/세션 TTL·재시도 예산 합의 및 실제 배포 버전.
+5. 재시도 병합 시 필요한 정규화·정책·현재 시도 검증과 보관 정책.
+
+실제 GPU 모델 실행 순서/소요시간/인증/동시 요청/입력 제한/최종 지도 품질과 운영 부하는 미검증이다.
+명세의 요청/응답 어댑터 검증과 실제 BE·AI·DB 통합 검증을 구분한다.
+
+
+### #6 PR과의 분리
+
+#10 변경은 `feature/#10-ai-integration`에서 관리한다. 기준 커밋은 #6의 `049dc09`이며,
+기존 미커밋 14개 파일을 내용 변경 없이 이 브랜치로 옮긴 뒤 Swagger 및 HTTP 부분 실패 테스트를 보완했다.
+기존 #6 브랜치/PR에 commit·push하지 않는다. 실제 AI 주소·토큰 확인과 실서버 E2E는 별도 진행한다.
+
+### 로컬 실서버 테스트 준비 (외부 호출 보류)
+
+현재 .env는 변경하지 않는다. Railway CLI 설치·로그인·배포·환경변수 변경도 수행하지 않는다.
+실제 외부 AI 호출은 테스트 이미지와 인증 설정 확인 후 별도 승인으로 진행한다.
+
+후보 이미지: `test/fixtures/non-sensitive-pattern-256x192.png`.
+로컬에서 생성한 256×192 단일 프레임 패턴 PNG(1,097 bytes)로 사람·사진·개인정보·EXIF가 없다.
+기존 테스트의 1×1 PNG와 달리 AI 입력 크기를 충족한다. 전송/디코딩 확인용이며
+실제 사진이나 생성·변조 판정 정확도 검증용이 아니다. 특정 모델 점수를 기대하지 않는다.
+
+네트워크 없는 사전 점검:
+
+```bash
+node scripts/analysis-local-smoke.cjs
+```
+
+스크립트는 기본 dry-run이며 이미지 크기/CRC와 설정 준비 여부만 출력한다.
+서버 주소의 실제 값이나 Bearer 토큰은 출력하지 않는다. .env에 쓰지 않는다.
+설정 준비 여부는 실행 시 출력되는 boolean과 provider/timeout으로 확인한다. 문서에 기록된 과거 설정을 현재 상태로 간주하지 않는다.
+ALL 개발 예산은 최소 241000ms이고 통신 여유까지 합의해야 한다.
+
+실제 AI 호출 승인 후 절차:
+
+1. 실제 배포 버전과 AI URL·토큰·테스트 이미지 사용을 확인한다.
+2. 사용자가 승인한 환경 설정에서 AI_PROVIDER=http, AI_SERVER_BASE_URL, AI_SERVICE_TOKEN,
+   AI_REQUEST_TIMEOUT_MS를 준비한다. 이 문서/스크립트에 토큰을 기록하지 않는다.
+3. 같은 환경으로 로컬 BE를 시작/재시작한다. DB 저장을 확인할 수 있는 로컬 개발 DB를 사용한다.
+4. 아래 명령은 로컬 BE의 POST /api/analysis에 전송하며 **BE가 외부 AI를 호출할 수 있다**.
+
+```bash
+node scripts/analysis-local-smoke.cjs --execute
+# 다른 승인된 PNG를 선택하려면 --file <local-path>
+# 로컬 BE 포트가 다르면 --be-url http://127.0.0.1:<port>/api/analysis
+```
+
+스크립트의 목적지는 loopback HTTP만 허용하고 redirect를 따르지 않는다.
+공개 BE 응답의 202/ANALYSIS202와 분석 상태/점수만 요약 출력한다.
+실행 중인 BE가 설정을 다시 읽었는지는 스크립트가 보증하지 않으므로 반드시 재시작/설정 확인이 필요하다.
+이 브랜치에는 상세 GET이 없으므로 모델별 결과는 로컬 Repository/DB에서 별도 확인한다.
+rawScore·지도·인증 정보·공급자 오류 본문을 스크립트가 출력하지 않는다.
+
+### 실제 결과가 Prisma Studio에서 보이지 않을 때
+
+`Analysis`는 PostgreSQL의 `analysis_requests`, `AnalysisModelResult`는
+`analysis_model_results`에 매핑된다. HTTP와 Mock은 동일한 정규화/Repository 저장 경로를 사용한다.
+`completeV1`은 모델별 upsert와 분석 상태 갱신을 하나의 트랜잭션으로 처리하며,
+저장 실패를 성공 202로 무시하지 않는다. HTTP 실패 시 Mock 자동 전환은 없다.
+
+Prisma Studio에서 기존 필터를 지우고 새로고침한 뒤 POST 응답의 `analysisId`를
+`Analysis.id`와 `AnalysisModelResult.analysisId`에서 각각 검색한다.
+모델별 두 행의 `kind`는 `GENERATION`/`MANIPULATION`이다.
+생성 점수가 `null`이거나 reasons가 빈 배열이어도 `INCONCLUSIVE`이면 정상 저장 결과다.
+`aiRiskLevel`은 현재 매핑하지 않으므로 null이며, 이 값으로 저장 실패를 판단하지 않는다.
+
+`overallResult`는 별도 컬럼/JSON으로 영구 저장하지 않는다. 저장된 두 모델의
+status/decision으로 `calculateOverallResult`를 호출해 복원한다. POST 공개 응답에도 포함하지 않는다.
+
+로컬 BE와 같은 디렉터리/환경의 DB에서 새 요청 결과를 Repository로 즉시 재조회:
+
+```bash
+node scripts/analysis-local-smoke.cjs --execute --verify-db
+```
+
+이미 받은 analysisId만 읽기 전용 재조회(AI 호출 없음):
+
+```bash
+node scripts/analysis-local-smoke.cjs --verify-db --analysis-id <analysisId>
+```
+
+DB 검증은 모델별 안전한 필드와 복원한 종합 판정을 출력한다. 같은 ID가 없거나 두 모델 행이
+없으면 실패한다. 이 조회만으로 HTTP Provider 실행을 증명하지는 않으며,
+실행 프로세스의 provider와 실제 upstream 호출은 별도로 확인해야 한다.
+BE와 Studio는 시작 시의 환경변수가 `.env`보다 우선하므로 같은 폴더에서 실행했어도
+서로 다른 DB를 사용할 수 있다. 연결 문자열을 출력하지 않고 연결 대상과 schema의 일치 여부를 비교한다.
+
+Railway 검증에는 공개 BE URL, 프로젝트/서비스/환경, 접근 권한, 배포된 commit/HTTP Adapter 여부,
+AI 환경변수와 프록시 timeout 설정, 승인된 테스트 이미지가 필요하다.
+Railway 주소·권한을 받기 전에는 로컬 검증을 Railway 검증으로 보고하지 않는다.

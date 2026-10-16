@@ -447,7 +447,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
             status: model.status,
             decision: model.decision,
             displayScore: model.displayScore,
-            reasons: model.reasons,
+            reasons: model.reasons.map((description: string) => ({ description })),
             limitations: model.limitations,
             errorCode: model.errorCode,
             retryable: model.error?.retryable ?? null,

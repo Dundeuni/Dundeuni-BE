@@ -193,7 +193,7 @@ describe('CuRe + TruFor v0.2', () => {
     }
     if (invalid === 'coordinate') map.coordinateSpace = 'WRONG' as any;
     if (invalid === 'format') map.format = 'WRONG' as any;
-    if (invalid === 'ratio') map.imageSize = { width: 2, height: 1 };
+    if (invalid === 'ratio') map.imageSize = { width: 100, height: 1 };
     if (invalid === 'oversize')
       map.data = Buffer.alloc(1048577).toString('base64');
     if (invalid === 'map-size') map.mapSize = { width: 1025, height: 1025 };
@@ -228,7 +228,7 @@ describe('CuRe + TruFor v0.2', () => {
     expect(() =>
       validateAiImageResponseV02({
         ...valid,
-        generation: { ...valid.generation, rawScore: 0.01 },
+        generation: { ...valid.generation, rawScore: { score: 0.01 } },
       }),
     ).toThrow();
     expect(calculateOverallResult(null, null).decision).toBe('INCONCLUSIVE');

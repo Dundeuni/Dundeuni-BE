@@ -1,6 +1,6 @@
 import {
   AiModelDecision,
-  AiModelResultV1,
+  AiModelResultV02,
   ImageOverallResult,
   ImageModelPublicResultDto,
 } from './image-analysis-v1.dto';
@@ -34,7 +34,7 @@ export const DECISION_LABELS: Record<AiModelDecision, string> = {
   INCONCLUSIVE: '판단 불가',
 };
 type DecisionModel = Pick<
-  AiModelResultV1 | ImageModelPublicResultDto,
+  AiModelResultV02 | ImageModelPublicResultDto,
   'status' | 'decision'
 >;
 /** Prisma에서 조회한 모델별 결과에도 사용할 수 있다. 점수는 합산하지 않는다. */

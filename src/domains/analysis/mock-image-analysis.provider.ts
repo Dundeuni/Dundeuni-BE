@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { validateImageAnalysisRequest } from './image-analysis-request.validator';
+export { validateImageAnalysisRequest as validateMockRequest } from './image-analysis-request.validator';
+import { HttpImageAnalysisProvider } from './http-image-analysis.provider';
 import { PNG } from 'pngjs';
 import {
   calculateOverallResult,
@@ -42,7 +46,7 @@ export class MockImageAnalysisProvider implements ImageAnalysisProvider {
     signal?: AbortSignal,
   ): Promise<AiImageAnalysisResponseV02> {
     if (!request) throw new Error('Mock requires v1 request context');
-    validateMockRequest(request);
+    validateImageAnalysisRequest(request);
     if (this.scenario === 'TIMEOUT') {
       return new Promise((_, reject) => {
         const abort = () => reject(new Error('Mock aborted'));
@@ -84,11 +88,16 @@ export class MockImageAnalysisProvider implements ImageAnalysisProvider {
       elementId: request.elementId,
       sourceType: request.sourceType,
       requestedModels: [
-        generationRequested ? 'GENERATION' : null,
-        manipulationRequested ? 'MANIPULATION' : null,
+        generationRequested ? ('generation' as const) : null,
+        manipulationRequested ? ('manipulation' as const) : null,
       ].filter((value) => value !== null),
       status,
-      analysisImage: null,
+      analysisImage: {
+        inputSha256: createHash('sha256').update(_file.buffer).digest('hex'),
+        width: 32,
+        height: 32,
+        normalizationVersion: 'mock-normalization-v0.2',
+      },
       generation,
       manipulation,
       overallResult: calculateOverallResult(generation, manipulation),
@@ -116,20 +125,19 @@ export class MockImageAnalysisProvider implements ImageAnalysisProvider {
     const decision = failed ? null : pilotDecision(kind, score);
     const png =
       this.scenario === 'LOCALIZATION' && name === 'TruFor'
-        ? PNG.sync.write(new PNG({ width: 1, height: 1 }))
+        ? PNG.sync.write(new PNG({ width: 1, height: 1 }), { colorType: 0 })
         : null;
     return {
       status: failed ? 'FAILED' : 'SUCCEEDED',
       modelName: name,
       modelVersion: `${name}-mock-v0.2`,
       policyVersion: 'mock-pilot-v0.2',
-      rawScore: failed ? null : score,
+      rawScore: failed ? null : { score },
       displayScore: failed ? null : pilotDisplayScore(score, decision!),
       decision,
       decisionLabel: decision === null ? null : DECISION_LABELS[decision],
-      reasons: failed
-        ? []
-        : [{ description: `[MOCK] ${name} 고정 가상 분석 근거` }],
+      reasons:
+        failed || inconclusive ? [] : [`[MOCK] ${name} 점수 기반 검토 문구`],
       limitations: failed
         ? []
         : ['MOCK 응답이며 실제 AI 분석 결과가 아닙니다.'],
@@ -139,23 +147,20 @@ export class MockImageAnalysisProvider implements ImageAnalysisProvider {
             kind: 'MANIPULATION_HEATMAP',
             mimeType: 'image/png',
             data: png.toString('base64'),
-            imageSize: { width: 1, height: 1 },
+            imageSize: { width: 32, height: 32 },
             mapSize: { width: 1, height: 1 },
             coordinateSpace: 'ANALYSIS_IMAGE',
           }
         : null,
       errorCode: failed ? 'MOCK_MODEL_FAILED' : null,
-      error: failed ? { code: 'MOCK_MODEL_FAILED', retryable: false } : null,
+      error: failed
+        ? {
+            code: 'MOCK_MODEL_FAILED',
+            message: 'Mock model failed',
+            retryable: false,
+          }
+        : null,
     };
-  }
-}
-export class HttpImageAnalysisProviderUnavailable extends UnavailableImageAnalysisProvider {
-  async analyze(): Promise<never> {
-    throw new ApiError(
-      503,
-      'ANALYSIS503',
-      'HTTP AI Provider가 아직 구현되지 않았습니다.',
-    );
   }
 }
 export function selectImageAnalysisProvider(
@@ -168,7 +173,7 @@ export function selectImageAnalysisProvider(
     throw new Error('AI_REQUEST_TIMEOUT_MS must be a positive integer');
   const mode = config.get<string>('AI_PROVIDER') ?? 'unavailable';
   if (mode === 'unavailable') return new UnavailableImageAnalysisProvider();
-  if (mode === 'http') return new HttpImageAnalysisProviderUnavailable();
+  if (mode === 'http') return new HttpImageAnalysisProvider(config);
   if (mode !== 'mock')
     throw new Error('AI_PROVIDER must be mock, http or unavailable');
   if (config.get<string>('NODE_ENV') === 'production')
@@ -180,24 +185,4 @@ export function selectImageAnalysisProvider(
     `MOCK AI enabled (${scenario}); results are synthetic`,
   );
   return new MockImageAnalysisProvider(scenario as MockScenario);
-}
-
-export function validateMockRequest(request: AiImageAnalysisRequestV1): void {
-  const uuid =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  const v4 =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (
-    !uuid.test(request.analysisId) ||
-    !uuid.test(request.elementId) ||
-    !v4.test(request.requestId) ||
-    !['IMAGE', 'SCREEN_CROP'].includes(request.sourceType) ||
-    !['ALL', 'GENERATION', 'MANIPULATION'].includes(request.models) ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/.test(
-      request.deadlineAt,
-    ) ||
-    !Number.isFinite(Date.parse(request.deadlineAt)) ||
-    Date.parse(request.deadlineAt) <= Date.now()
-  )
-    throw new Error('Invalid v0.2 request context');
 }

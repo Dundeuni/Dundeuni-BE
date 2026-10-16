@@ -114,12 +114,37 @@ export interface ImageOverallResult {
   uncertainKinds: ('generation' | 'manipulation')[];
 }
 /** v0.2 확정된 필드를 기존 v1 타입에서 확장. legacy validator 사용자는 그대로 유지한다. */
-export interface AiModelResultV02 extends AiModelResultV1 {
-  rawScore: number | null;
+export interface AiModelResultV02 extends Omit<
+  AiModelResultV1,
+  'rawScore' | 'reasons' | 'modelName' | 'limitations' | 'error'
+> {
+  modelName?: string;
+  rawScore: { score: number } | null;
+  reasons: string[];
+  limitations: string[];
+  error: { code: string; message: string; retryable: boolean } | null;
   decisionLabel: string | null;
 }
-export interface AiImageAnalysisResponseV02 extends AiImageAnalysisResponseV1 {
+export interface AiAnalysisImageV02 {
+  inputSha256: string;
+  width: number;
+  height: number;
+  normalizationVersion: string;
+}
+export interface AiImageAnalysisResponseV02 extends Omit<
+  AiImageAnalysisResponseV1,
+  | 'generation'
+  | 'manipulation'
+  | 'requestedModels'
+  | 'analysisImage'
+  | 'elementId'
+  | 'sourceType'
+> {
   contractVersion: '1.0';
+  elementId: string;
+  sourceType: 'IMAGE' | 'SCREEN_CROP';
+  requestedModels: ('generation' | 'manipulation')[];
+  analysisImage: AiAnalysisImageV02;
   generation: AiModelResultV02 | null;
   manipulation: AiModelResultV02 | null;
   overallResult: ImageOverallResult;

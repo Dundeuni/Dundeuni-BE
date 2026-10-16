@@ -122,49 +122,158 @@ export function validateAiImageResponseV1(
 export function validateAiImageResponseV02(
   value: unknown,
 ): AiImageAnalysisResponseV02 {
-  const root = validateAiImageResponseV1(value);
-  if (root.contractVersion !== '1.0')
-    throw new Error('Invalid v0.2 contract version');
-  const typed = root as AiImageAnalysisResponseV02;
-  const requested = [typed.generation, typed.manipulation].filter(
-    (model) => model !== null,
+  if (!record(value)) throw new Error('Invalid v0.2 response');
+  required(value, [
+    'contractVersion',
+    'requestId',
+    'analysisId',
+    'elementId',
+    'sourceType',
+    'requestedModels',
+    'status',
+    'analysisImage',
+    'generation',
+    'manipulation',
+    'overallResult',
+    'completedAt',
+  ]);
+  const uuid =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (
+    value.contractVersion !== '1.0' ||
+    typeof value.requestId !== 'string' ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value.requestId,
+    ) ||
+    typeof value.analysisId !== 'string' ||
+    !uuid.test(value.analysisId) ||
+    typeof value.elementId !== 'string' ||
+    !uuid.test(value.elementId) ||
+    !['IMAGE', 'SCREEN_CROP'].includes(String(value.sourceType)) ||
+    typeof value.completedAt !== 'string' ||
+    !Number.isFinite(Date.parse(value.completedAt)) ||
+    !/(Z|\+00:00)$/.test(value.completedAt) ||
+    !['COMPLETED', 'PARTIAL_FAILED', 'FAILED'].includes(String(value.status))
+  )
+    throw new Error('Invalid v0.2 envelope');
+  if (
+    !record(value.analysisImage) ||
+    typeof value.analysisImage.inputSha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/i.test(value.analysisImage.inputSha256) ||
+    !Number.isInteger(value.analysisImage.width) ||
+    !Number.isInteger(value.analysisImage.height) ||
+    (value.analysisImage.width as number) < 32 ||
+    (value.analysisImage.height as number) < 32 ||
+    (value.analysisImage.width as number) > 8192 ||
+    (value.analysisImage.height as number) > 8192 ||
+    (value.analysisImage.width as number) *
+      (value.analysisImage.height as number) >
+      16000000 ||
+    typeof value.analysisImage.normalizationVersion !== 'string' ||
+    !value.analysisImage.normalizationVersion.trim()
+  )
+    throw new Error('Invalid analysis image');
+  const typed = value as unknown as AiImageAnalysisResponseV02;
+  const expectedModels = (['generation', 'manipulation'] as const).filter(
+    (kind) => typed[kind] !== null,
   );
-  if (!requested.length) throw new Error('No requested model result');
-  for (const [kind, model] of [
-    ['generation', typed.generation],
-    ['manipulation', typed.manipulation],
-  ] as const) {
-    if (!model) continue;
+  if (
+    !Array.isArray(typed.requestedModels) ||
+    !expectedModels.length ||
+    JSON.stringify(typed.requestedModels) !== JSON.stringify(expectedModels)
+  )
+    throw new Error('Invalid requested models');
+  for (const kind of expectedModels) {
+    const item = typed[kind];
+    if (!record(item)) throw new Error('Invalid requested model');
+    required(item, [
+      'status',
+      'rawScore',
+      'displayScore',
+      'decision',
+      'decisionLabel',
+      'reasons',
+      'limitations',
+      'modelVersion',
+      'policyVersion',
+      'errorCode',
+      'error',
+      'localization',
+    ]);
     if (
-      model.modelName !== (kind === 'generation' ? 'CuRe' : 'TruFor') ||
-      !('decisionLabel' in model)
+      !['SUCCEEDED', 'FAILED'].includes(String(item.status)) ||
+      (item.modelName !== undefined &&
+        item.modelName !== (kind === 'generation' ? 'CuRe' : 'TruFor')) ||
+      'map' in item ||
+      'conf' in item ||
+      'imgsize' in item ||
+      typeof item.modelVersion !== 'string' ||
+      !item.modelVersion.trim() ||
+      typeof item.policyVersion !== 'string' ||
+      !item.policyVersion.trim() ||
+      !Array.isArray(item.reasons) ||
+      item.reasons.length > 5 ||
+      item.reasons.some((reason) => typeof reason !== 'string') ||
+      !Array.isArray(item.limitations) ||
+      item.limitations.length > 8 ||
+      item.limitations.some((text) => typeof text !== 'string')
     )
-      throw new Error('Invalid v0.2 model');
-    if (model.status === 'FAILED') {
+      throw new Error('Invalid v0.2 model details');
+    if (item.status === 'FAILED') {
       if (
-        model.rawScore !== null ||
-        model.displayScore !== null ||
-        model.decision !== null ||
-        model.decisionLabel !== null ||
-        model.localization !== null ||
-        model.reasons.length ||
-        model.limitations.length
+        item.rawScore !== null ||
+        item.displayScore !== null ||
+        item.decision !== null ||
+        item.decisionLabel !== null ||
+        item.localization !== null ||
+        item.reasons.length ||
+        item.limitations.length ||
+        typeof item.errorCode !== 'string' ||
+        !item.errorCode.trim() ||
+        !record(item.error) ||
+        item.error.code !== item.errorCode ||
+        typeof item.error.message !== 'string' ||
+        typeof item.error.retryable !== 'boolean'
       )
-        throw new Error('Invalid failed v0.2 payload');
+        throw new Error('Invalid failed model');
     } else {
-      if (typeof model.rawScore !== 'number')
-        throw new Error('Missing raw score');
-      const decision = pilotDecision(kind, model.rawScore);
       if (
-        model.decision !== decision ||
-        model.displayScore !== pilotDisplayScore(model.rawScore, decision) ||
-        typeof model.decisionLabel !== 'string' ||
-        !model.decisionLabel.trim()
+        !record(item.rawScore) ||
+        Object.keys(item.rawScore).length !== 1 ||
+        typeof item.rawScore.score !== 'number'
       )
-        throw new Error('Invalid pilot policy result');
+        throw new Error('Invalid raw score object');
+      const decision = pilotDecision(kind, item.rawScore.score);
+      if (
+        item.decision !== decision ||
+        item.displayScore !==
+          pilotDisplayScore(item.rawScore.score, decision) ||
+        typeof item.decisionLabel !== 'string' ||
+        !item.decisionLabel.trim() ||
+        item.errorCode !== null ||
+        item.error !== null ||
+        (decision === 'INCONCLUSIVE' && item.reasons.length)
+      )
+        throw new Error('Invalid pilot result');
     }
-    validateLocalization(model.localization);
+    if (kind === 'generation' && item.localization !== null)
+      throw new Error('Generation localization must be null');
+    validateLocalization(item.localization);
+    if (
+      item.localization !== null &&
+      (item.localization.imageSize.width !== typed.analysisImage.width ||
+        item.localization.imageSize.height !== typed.analysisImage.height)
+    )
+      throw new Error('Localization context mismatch');
   }
+  const statuses = expectedModels.map((kind) => typed[kind]!.status);
+  const expectedStatus = statuses.every((status) => status === 'FAILED')
+    ? 'FAILED'
+    : statuses.includes('FAILED')
+      ? 'PARTIAL_FAILED'
+      : 'COMPLETED';
+  if (typed.status !== expectedStatus)
+    throw new Error('Invalid aggregate status');
   const expected = calculateOverallResult(typed.generation, typed.manipulation);
   if (
     !record(typed.overallResult) ||
