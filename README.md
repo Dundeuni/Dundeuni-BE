@@ -40,13 +40,20 @@ Redis/BullMQ는 분석 요청의 비동기 처리가 실제로 필요해질 때 
 ```bash
 npm install
 cp .env.example .env
+npm run prisma:generate
+npm run prisma:migrate
 npm run start:dev
 ```
 
 - Health check: `GET http://localhost:3000/api/health`
 - Swagger: `http://localhost:3000/api/docs`
 
-Prisma schema와 migration은 DB 모델을 확정하는 이슈에서 추가합니다.
+Analysis의 초기 Prisma schema와 migration이 포함되어 있습니다. PostgreSQL 연결과 실제 JWT_ACCESS_SECRET 및 Analysis 정책 설정 후 실행합니다.
+
+- 이미지 분석 요청: `POST /api/analysis` (인증 임시 비활성화, multipart IMAGE/file)
+- 실제 AI Provider 미연동 상태에서는 `503 / ANALYSIS503`을 반환합니다. Usage는 연동 TODO입니다.
+- 계약과 미확정 정책: [Analysis API](./docs/api/analysis.md)
+- 검증: `npm run build`, `npm run typecheck`, `npm test -- --runInBand`
 
 ## 협업
 
