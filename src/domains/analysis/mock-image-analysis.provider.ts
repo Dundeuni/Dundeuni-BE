@@ -169,8 +169,14 @@ export function selectImageAnalysisProvider(
   const timeoutMs = Number(
     config.get<string>('AI_REQUEST_TIMEOUT_MS') ?? 30000,
   );
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
-    throw new Error('AI_REQUEST_TIMEOUT_MS must be a positive integer');
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > 2147483647
+  )
+    throw new Error(
+      'AI_REQUEST_TIMEOUT_MS must be an integer between 1 and 2147483647',
+    );
   const mode = config.get<string>('AI_PROVIDER') ?? 'unavailable';
   if (mode === 'unavailable') return new UnavailableImageAnalysisProvider();
   if (mode === 'http') return new HttpImageAnalysisProvider(config);

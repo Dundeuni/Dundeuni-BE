@@ -95,6 +95,18 @@ describe('Mock AI Provider', () => {
       selectImageAnalysisProvider(new ConfigService({ AI_PROVIDER: 'http' })),
     ).toThrow('AI_SERVER_BASE_URL and AI_SERVICE_TOKEN');
   });
+  it.each(['2147483648', '9007199254740991'])(
+    'rejects timer overflow at startup and before calling a provider: %s',
+    async (timeout) => {
+      const config = new ConfigService({ AI_REQUEST_TIMEOUT_MS: timeout });
+      expect(() => selectImageAnalysisProvider(config)).toThrow();
+      const provider = { analyze: jest.fn() };
+      await expect(
+        new ImageAnalysisService(provider, config).analyze(file, request()),
+      ).rejects.toMatchObject({ status: 503 });
+      expect(provider.analyze).not.toHaveBeenCalled();
+    },
+  );
   it('rejects invalid v1 score even with HTTP success', async () => {
     const valid = await new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(
       file,

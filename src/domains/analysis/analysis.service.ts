@@ -66,7 +66,11 @@ export class AnalysisService {
         const timeoutMs = Number(
           this.config.get<string>('AI_REQUEST_TIMEOUT_MS') ?? 30000,
         );
-        if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
+        if (
+          !Number.isSafeInteger(timeoutMs) ||
+          timeoutMs <= 0 ||
+          timeoutMs > 2147483647
+        )
           throw new ApiError(
             500,
             'COMMON500',

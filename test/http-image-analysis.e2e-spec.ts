@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { ApiError } from '../src/common/http/api-error';
 import { createServer } from 'node:http';
 import { randomUUID, createHash } from 'node:crypto';
 import { PNG } from 'pngjs';
@@ -290,9 +291,33 @@ describe('v0.2 real HTTP transport with mocked HTTP', () => {
       .spyOn(globalThis, 'fetch')
       .mockRejectedValue(new TypeError('secret network detail'));
     const file = makeFile();
+    const error = await new HttpImageAnalysisProvider(settings())
+      .analyze(file, context(file))
+      .catch((error) => error);
+    expect(error).toBeInstanceOf(ApiError);
+    if (!(error instanceof ApiError))
+      throw new Error('Expected a sanitized ApiError');
+    expect(error.getStatus()).toBe(503);
+    expect(error.getResponse()).toEqual({
+      isSuccess: false,
+      code: 'ANALYSIS503',
+      message: '이미지 분석을 수행할 수 없습니다.',
+      result: null,
+    });
+    expect(JSON.stringify(error.getResponse())).not.toContain(
+      'secret network detail',
+    );
+  });
+  it('rejects an expired deadline without sending an HTTP request', async () => {
+    const fetcher = jest.spyOn(globalThis, 'fetch');
+    const file = makeFile();
     await expect(
-      new HttpImageAnalysisProvider(settings()).analyze(file, context(file)),
+      new HttpImageAnalysisProvider(settings()).analyze(file, {
+        ...context(file),
+        deadlineAt: new Date(Date.now() - 1000).toISOString(),
+      }),
     ).rejects.toMatchObject({ status: 503 });
+    expect(fetcher).not.toHaveBeenCalled();
   });
   it('bounds a stalled transport by timeout and aborts the request', async () => {
     const config = settings();
