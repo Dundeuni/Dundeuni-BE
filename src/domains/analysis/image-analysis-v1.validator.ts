@@ -1,3 +1,10 @@
+import { AiImageAnalysisResponseV02 } from './image-analysis-v1.dto';
+import {
+  calculateOverallResult,
+  pilotDecision,
+  pilotDisplayScore,
+} from './image-analysis-policy';
+import { validateLocalization } from './image-localization.validator';
 import {
   AiImageAnalysisResponseV1,
   AiModelResultV1,
@@ -109,4 +116,69 @@ export function validateAiImageResponseV1(
     throw new Error('Inconsistent aggregate status');
   }
   return value as unknown as AiImageAnalysisResponseV1;
+}
+
+/** v0.2에서는 contractVersion=1.0이며 기존 공통 검증 뒤 추가 규칙을 검사한다. */
+export function validateAiImageResponseV02(
+  value: unknown,
+): AiImageAnalysisResponseV02 {
+  const root = validateAiImageResponseV1(value);
+  if (root.contractVersion !== '1.0')
+    throw new Error('Invalid v0.2 contract version');
+  const typed = root as AiImageAnalysisResponseV02;
+  const requested = [typed.generation, typed.manipulation].filter(
+    (model) => model !== null,
+  );
+  if (!requested.length) throw new Error('No requested model result');
+  for (const [kind, model] of [
+    ['generation', typed.generation],
+    ['manipulation', typed.manipulation],
+  ] as const) {
+    if (!model) continue;
+    if (
+      model.modelName !== (kind === 'generation' ? 'CuRe' : 'TruFor') ||
+      !('decisionLabel' in model)
+    )
+      throw new Error('Invalid v0.2 model');
+    if (model.status === 'FAILED') {
+      if (
+        model.rawScore !== null ||
+        model.displayScore !== null ||
+        model.decision !== null ||
+        model.decisionLabel !== null ||
+        model.localization !== null ||
+        model.reasons.length ||
+        model.limitations.length
+      )
+        throw new Error('Invalid failed v0.2 payload');
+    } else {
+      if (typeof model.rawScore !== 'number')
+        throw new Error('Missing raw score');
+      const decision = pilotDecision(kind, model.rawScore);
+      if (
+        model.decision !== decision ||
+        model.displayScore !== pilotDisplayScore(model.rawScore, decision) ||
+        typeof model.decisionLabel !== 'string' ||
+        !model.decisionLabel.trim()
+      )
+        throw new Error('Invalid pilot policy result');
+    }
+    validateLocalization(model.localization);
+  }
+  const expected = calculateOverallResult(typed.generation, typed.manipulation);
+  if (
+    !record(typed.overallResult) ||
+    typed.overallResult.decision !== expected.decision ||
+    typed.overallResult.decisionLabel !== expected.decisionLabel ||
+    typed.overallResult.policyVersion !== expected.policyVersion ||
+    JSON.stringify(typed.overallResult.suspectedKinds) !==
+      JSON.stringify(expected.suspectedKinds) ||
+    JSON.stringify(typed.overallResult.uncertainKinds) !==
+      JSON.stringify(expected.uncertainKinds) ||
+    'score' in typed.overallResult ||
+    'displayScore' in typed.overallResult ||
+    'rawScore' in typed.overallResult
+  )
+    throw new Error('Invalid overall result');
+  return typed;
 }

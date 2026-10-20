@@ -1,5 +1,11 @@
+import { AnalysisSummaryRepository } from './analysis-summary.repository';
+import { Request } from 'express';
 import {
   Body,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Req,
   Controller,
   HttpCode,
   Post,
@@ -25,6 +31,7 @@ import { ApiErrorFilter } from '../../common/http/api-error';
 import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
 import { AnalysisService } from './analysis.service';
+import { AnalysisResultResponseDto } from './analysis-result.dto';
 
 function errorSchema(code: string) {
   return {
@@ -45,7 +52,82 @@ function errorSchema(code: string) {
 // @UseGuards(AccessTokenGuard)
 @UseFilters(ApiErrorFilter)
 export class AnalysisController {
-  constructor(private readonly service: AnalysisService) {}
+  constructor(
+    private readonly service: AnalysisService,
+    private readonly summaries: AnalysisSummaryRepository,
+  ) {}
+
+  @Get(':analysisId')
+  @ApiOperation({
+    summary: '이미지 분석 결과 상세 조회',
+    description:
+      '저장된 분석 및 모델별 결과를 조회합니다. 요약은 기존 /summary에서 별도로 조회합니다. 개발용 인증 정책 유지.',
+  })
+  @ApiResponse({ status: 200, type: AnalysisResultResponseDto })
+  @ApiResponse({ status: 400, description: 'COMMON400: UUID 형식 오류' })
+  @ApiResponse({
+    status: 404,
+    description: 'COMMON404: 없거나 다른 사용자/만료된 기록',
+  })
+  @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
+  getResult(
+    @Param('analysisId', new ParseUUIDPipe()) id: string,
+    @Req() request: Request & { user?: { id: string } },
+  ) {
+    return this.service.findOne(request.user?.id ?? 'development-user', id);
+  }
+
+  @Get(':analysisId/summary')
+  @ApiOperation({
+    summary: '이미지 분석 비동기 요약 조회',
+    description:
+      'PENDING/FAILED는 summary=null. 비활성화 또는 작업 등록 전 summaryStatus=null. 개발용 인증 정책 유지.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'ANALYSIS200: 요약 상태 조회',
+    schema: {
+      type: 'object',
+      properties: {
+        isSuccess: { type: 'boolean', example: true },
+        code: { type: 'string', example: 'ANALYSIS200' },
+        message: {
+          type: 'string',
+          example: '이미지 분석 요약 조회에 성공했습니다.',
+        },
+        result: {
+          type: 'object',
+          properties: {
+            analysisId: { type: 'string', format: 'uuid' },
+            summaryStatus: {
+              type: 'string',
+              enum: ['PENDING', 'COMPLETED', 'FAILED'],
+              nullable: true,
+            },
+            summary: { type: 'string', nullable: true },
+            summaryModel: { type: 'string', nullable: true },
+            summarizedAt: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'COMMON400: UUID 형식 오류' })
+  @ApiResponse({
+    status: 404,
+    description: 'COMMON404: 없거나 다른 사용자/만료된 기록',
+  })
+  @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
+  getSummary(
+    @Param('analysisId', new ParseUUIDPipe()) id: string,
+    @Req() request: Request & { user?: { id: string } },
+  ) {
+    return this.summaries.get(id, request.user?.id ?? 'development-user');
+  }
 
   @Post()
   @HttpCode(202)
@@ -53,7 +135,7 @@ export class AnalysisController {
   @ApiOperation({
     summary: '이미지 분석 요청 생성',
     description:
-      '요청 유형 SCREEN/IMAGE/TEXT 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. 실제 Provider 미연동 시 503.',
+      '요청 유형 SCREEN/IMAGE/TEXT 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. AI_PROVIDER=mock은 CuRe/TruFor v0.2 개발 전용 가상 분석입니다. 부분 실패는 성공 모델을 보존하며 202, 전체 실패/타임아웃은 503. 위험도 매핑 미확정 시 null.',
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -101,7 +183,8 @@ export class AnalysisController {
             aiRiskLevel: {
               type: 'string',
               nullable: true,
-              description: 'Provider 계약 미확정. CAUTION 등, 확정 판정 아님.',
+              description:
+                '기존 Provider 위험도. overallResult와 별개이며 사기 확률이 아닙니다. 정책 미확정 시 null.',
             },
             reasons: {
               type: 'array',
@@ -152,11 +235,11 @@ export class AnalysisController {
   })
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   create(
-    // @Req() request: AuthenticatedRequest,
+    @Req() request: Request & { user?: { id: string } },
     @Body() _body: CreateAnalysisDto,
     @UploadedFile() file: Express.Multer.File | undefined,
   ) {
     // return this.service.create(request.user.id, file);
-    return this.service.create('development-user', file);
+    return this.service.create(request.user?.id ?? 'development-user', file);
   }
 }
