@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Analysis } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
+import sharp = require('sharp');
 import { ApiError } from '../../common/http/api-error';
 import { AnalysisRepository } from './analysis.repository';
 import { AnalysisUsageService } from './analysis-usage.service';
@@ -47,6 +48,16 @@ export class AnalysisService {
           'COMMON415',
           'JPEG 또는 PNG 이미지와 일치하는 MIME/확장자/시그니처가 필요합니다.',
         );
+      try {
+        // metadata() alone accepts truncated files; decode all pixels before side effects.
+        await sharp(file.buffer, { failOn: 'warning' }).stats();
+      } catch {
+        throw new ApiError(
+          400,
+          'COMMON400',
+          '손상되었거나 읽을 수 없는 이미지 파일입니다.',
+        );
+      }
       const hash = createHash('sha256')
         .update('IMAGE\0')
         .update(file.mimetype)
