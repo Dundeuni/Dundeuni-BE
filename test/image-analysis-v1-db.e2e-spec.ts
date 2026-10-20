@@ -1,8 +1,21 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { AppModule } from '../src/app.module';
+import { IMAGE_ANALYSIS_PROVIDER } from '../src/domains/analysis/image-analysis.service';
+import { MockScenario } from '../src/domains/analysis/mock-image-analysis.provider';
+import { PNG } from 'pngjs';
 import { parse } from 'dotenv';
 import { PrismaClient } from '@prisma/client';
+import { calculateOverallResult } from '../src/domains/analysis/image-analysis-policy';
+import { ConfigService } from '@nestjs/config';
+import { AnalysisService } from '../src/domains/analysis/analysis.service';
+import { ImageAnalysisService } from '../src/domains/analysis/image-analysis.service';
+import { MockImageAnalysisProvider } from '../src/domains/analysis/mock-image-analysis.provider';
+import { AnalysisUsageService } from '../src/domains/analysis/analysis-usage.service';
 import { AnalysisRepository } from '../src/domains/analysis/analysis.repository';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { ImageModelPublicResultDto } from '../src/domains/analysis/image-analysis-v1.dto';
@@ -11,6 +24,17 @@ const dbDescribe = process.env.V1_DB_TEST === '1' ? describe : describe.skip;
 dbDescribe('V1 Prisma storage in isolated local schema', () => {
   const schema = `v1_test_${randomUUID().replaceAll('-', '')}`;
   let prisma: PrismaClient;
+  let app: INestApplication;
+  let scenario: MockScenario = 'BOTH_SUCCESS';
+  const usage = {
+    reserveAiUsage: jest.fn(async () => {}),
+    releaseAiUsage: jest.fn(async () => {}),
+  };
+  const provider = {
+    analyze: jest.fn((file, context, signal) =>
+      new MockImageAnalysisProvider(scenario).analyze(file, context, signal),
+    ),
+  };
   let repository: AnalysisRepository;
   let connection: URL;
   function sql(text: string) {
@@ -57,8 +81,32 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     connection.searchParams.set('schema', schema);
     prisma = new PrismaClient({ datasourceUrl: connection.toString() });
     repository = new AnalysisRepository(prisma as unknown as PrismaService);
+    const module = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(ConfigService)
+      .useValue(
+        new ConfigService({
+          ANALYSIS_MAX_FILE_BYTES: '1024',
+          ANALYSIS_RETENTION_SECONDS: '86400',
+          AI_REQUEST_TIMEOUT_MS: '100',
+        }),
+      )
+      .overrideProvider(PrismaService)
+      .useValue(prisma)
+      .overrideProvider(AnalysisUsageService)
+      .useValue(usage)
+      .overrideProvider(IMAGE_ANALYSIS_PROVIDER)
+      .useValue(provider)
+      .compile();
+    app = module.createNestApplication();
+    app.setGlobalPrefix('api');
+    app.useGlobalPipes(
+      new ValidationPipe({ transform: true, whitelist: true }),
+    );
+    await app.init();
+    await app.listen(0, '127.0.0.1');
   });
   afterAll(async () => {
+    if (app) await app.close();
     if (prisma) await prisma.$disconnect();
     if (connection) sql(`DROP SCHEMA IF EXISTS "${schema}" CASCADE;`);
   });
@@ -180,6 +228,297 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     expect(
       (await repository.findWithModelResults(row.id))?.modelResults,
     ).toHaveLength(0);
+  });
+  it.each([
+    'BOTH_SUCCESS',
+    'GENERATION_FAILED',
+    'MANIPULATION_FAILED',
+    'BOTH_FAILED',
+    'INCONCLUSIVE',
+    'TIMEOUT',
+  ] as const)('runs real service→Mock→Prisma flow for %s', async (scenario) => {
+    const config = new ConfigService({
+      ANALYSIS_MAX_FILE_BYTES: '128',
+      ANALYSIS_RETENTION_SECONDS: '86400',
+      AI_REQUEST_TIMEOUT_MS: '30',
+    });
+    const provider = new MockImageAnalysisProvider(scenario);
+    const imageService = new ImageAnalysisService(provider, config);
+    const usage = {
+      reserveAiUsage: async () => {},
+      releaseAiUsage: async () => {},
+    } as AnalysisUsageService;
+    const service = new AnalysisService(
+      repository,
+      imageService,
+      usage,
+      config,
+    );
+    const buffer = PNG.sync.write(new PNG({ width: 2, height: 2 }));
+    const file = {
+      buffer,
+      size: buffer.length,
+      mimetype: 'image/png',
+      originalname: 'test.png',
+    } as Express.Multer.File;
+    const userId = randomUUID();
+    if (scenario === 'BOTH_FAILED' || scenario === 'TIMEOUT') {
+      await expect(service.create(userId, file)).rejects.toMatchObject({
+        status: 503,
+      });
+    } else {
+      const response = await service.create(userId, file);
+      expect(response.result.status).toBe('COMPLETED');
+      expect(response.result.aiRiskLevel).toBeNull();
+    }
+    const saved = await prisma.analysis.findFirstOrThrow({
+      where: { userId },
+      include: { modelResults: true },
+    });
+    expect(saved.status).toBe(
+      scenario === 'BOTH_FAILED' || scenario === 'TIMEOUT'
+        ? 'FAILED'
+        : 'COMPLETED',
+    );
+    expect(saved.modelResults).toHaveLength(scenario === 'TIMEOUT' ? 0 : 2);
+    if (scenario === 'GENERATION_FAILED' || scenario === 'MANIPULATION_FAILED')
+      expect(saved.imageResultStatus).toBe('PARTIAL_FAILED');
+    if (scenario === 'INCONCLUSIVE')
+      expect(
+        saved.modelResults.find((m) => m.kind === 'GENERATION'),
+      ).toMatchObject({ decision: 'INCONCLUSIVE', displayScore: null });
+    for (const model of saved.modelResults) {
+      expect(model).not.toHaveProperty('rawScore');
+      expect(model).not.toHaveProperty('localization');
+    }
+    expect(buffer.every((byte) => byte === 0)).toBe(true);
+  });
+  it('rolls back final metadata and model writes together when v1 completion fails', async () => {
+    const row = await repository.create(
+      'test-user',
+      'hash',
+      new Date(Date.now() + 10000),
+    );
+    await repository.analyzing(row.id);
+    await expect(
+      repository.completeV1(
+        row.id,
+        {
+          status: 'COMPLETED',
+          generation: result(),
+          manipulation: { ...result(), decision: 'INVALID' as any },
+        },
+        new Date(),
+      ),
+    ).rejects.toThrow();
+    const saved = await repository.findWithModelResults(row.id);
+    expect(saved?.status).toBe('ANALYZING');
+    expect(saved?.completedAt).toBeNull();
+    expect(saved?.imageResultStatus).toBeNull();
+    expect(saved?.modelResults).toHaveLength(0);
+  });
+  it('v0.2 retry preserves successful CuRe, stores only allowed fields and reconstructs overall result', async () => {
+    const config = new ConfigService({ AI_REQUEST_TIMEOUT_MS: '1000' });
+    const row = await repository.create(
+      'retry-user',
+      'hash',
+      new Date(Date.now() + 10000),
+    );
+    const elementId = randomUUID();
+    const file = { buffer: Buffer.from('fixture') } as Express.Multer.File;
+    const makeRequest = (models: 'ALL' | 'MANIPULATION') => ({
+      file,
+      analysisId: row.id,
+      elementId,
+      requestId: randomUUID(),
+      models,
+      sourceType: 'IMAGE' as const,
+      deadlineAt: new Date(Date.now() + 1000).toISOString(),
+    });
+    const first = await new ImageAnalysisService(
+      new MockImageAnalysisProvider('MANIPULATION_FAILED'),
+      config,
+    ).analyze(file, makeRequest('ALL'));
+    if (!('format' in first)) throw new Error('Expected v0.2');
+    await repository.completeV1(row.id, first.models, first.completedAt);
+    const previous = await repository.findWithModelResults(row.id);
+    const originalGeneration = previous!.modelResults.find(
+      (m) => m.kind === 'GENERATION',
+    );
+    const second = await new ImageAnalysisService(
+      new MockImageAnalysisProvider('LOCALIZATION'),
+      config,
+    ).analyze(file, makeRequest('MANIPULATION'));
+    if (!('format' in second)) throw new Error('Expected v0.2');
+    expect(second.models.generation).toBeNull();
+    await repository.completeV1(row.id, second.models, second.completedAt);
+    const saved = await repository.findWithModelResults(row.id);
+    expect(saved!.modelResults).toHaveLength(2);
+    const generation = saved!.modelResults.find(
+      (m) => m.kind === 'GENERATION',
+    )!;
+    const manipulation = saved!.modelResults.find(
+      (m) => m.kind === 'MANIPULATION',
+    )!;
+    expect(generation).toEqual(originalGeneration);
+    expect(saved?.aiGenerationScore).toBe(previous?.aiGenerationScore);
+    expect(manipulation.status).toBe('SUCCEEDED');
+    expect(manipulation).not.toHaveProperty('localization');
+    expect(manipulation).not.toHaveProperty('rawScore');
+    expect(calculateOverallResult(generation, manipulation)).toMatchObject({
+      decision: 'GENERATION_OR_MANIPULATION_SUSPECTED',
+      suspectedKinds: ['generation', 'manipulation'],
+      uncertainKinds: [],
+    });
+  });
+  it.each([
+    ['BOTH_SUCCESS', 202, 'SUSPECTED'],
+    ['GENERATION_SUSPECTED', 202, 'SUSPECTED'],
+    ['MANIPULATION_SUSPECTED', 202, 'SUSPECTED'],
+    ['NO_CLEAR_SIGNAL', 202, 'NO_CLEAR_SIGNAL'],
+    ['GENERATION_FAILED', 202, 'SUSPECTED'],
+    ['MANIPULATION_FAILED', 202, 'SUSPECTED'],
+    ['BOTH_FAILED', 503, 'INCONCLUSIVE'],
+    ['INCONCLUSIVE', 202, 'SUSPECTED'],
+    ['BOTH_INCONCLUSIVE', 202, 'INCONCLUSIVE'],
+    ['TIMEOUT', 503, 'INCONCLUSIVE'],
+  ] as const)(
+    'verifies POST→Mock→real DB→repository lookup for %s',
+    async (selected, status, decision) => {
+      scenario = selected;
+      provider.analyze.mockClear();
+      usage.reserveAiUsage.mockClear();
+      usage.releaseAiUsage.mockClear();
+      const response = await request(app.getHttpServer())
+        .post('/api/analysis')
+        .field('type', 'IMAGE')
+        .attach(
+          'file',
+          PNG.sync.write(new PNG({ width: 1, height: 1 })),
+          'sample.png',
+        )
+        .expect(status);
+      const context = provider.analyze.mock.calls[0][1];
+      const saved = await repository.findWithModelResults(context.analysisId);
+      expect(saved).not.toBeNull();
+      expect(saved!.status).toBe(status === 503 ? 'FAILED' : 'COMPLETED');
+      expect(saved!.completedAt).toBeInstanceOf(Date);
+      expect(saved!.errorCode).toBe(status === 503 ? 'ANALYSIS503' : null);
+      expect(saved!.modelResults).toHaveLength(selected === 'TIMEOUT' ? 0 : 2);
+      for (const model of saved!.modelResults) {
+        expect(model.analysisId).toBe(context.analysisId);
+        expect(model.modelName).toBe(
+          model.kind === 'GENERATION' ? 'CuRe' : 'TruFor',
+        );
+      }
+      if (status === 202)
+        expect(response.body.result.analysisId).toBe(context.analysisId);
+      const generation =
+        saved!.modelResults.find((model) => model.kind === 'GENERATION') ??
+        null;
+      const manipulation =
+        saved!.modelResults.find((model) => model.kind === 'MANIPULATION') ??
+        null;
+      const overall = calculateOverallResult(generation, manipulation);
+      expect(overall.decision).toBe(
+        decision === 'SUSPECTED'
+          ? 'GENERATION_OR_MANIPULATION_SUSPECTED'
+          : decision,
+      );
+      expect(overall).not.toHaveProperty('score');
+      if (selected === 'TIMEOUT') {
+        expect(saved!.imageResultStatus).toBeNull();
+        expect(provider.analyze.mock.calls[0][2].aborted).toBe(true);
+      } else {
+        const wire = await provider.analyze.mock.results[0].value;
+        expect(saved!.imageResultStatus).toBe(wire.status);
+        expect(saved!.completedAt!.toISOString()).toBe(wire.completedAt);
+        expect(overall).toEqual(wire.overallResult);
+        for (const [key, stored] of [
+          ['generation', generation],
+          ['manipulation', manipulation],
+        ] as const) {
+          const model = wire[key]!;
+          expect(stored).toMatchObject({
+            analysisId: context.analysisId,
+            modelName: model.modelName,
+            modelVersion: model.modelVersion,
+            policyVersion: model.policyVersion,
+            status: model.status,
+            decision: model.decision,
+            displayScore: model.displayScore,
+            reasons: model.reasons,
+            limitations: model.limitations,
+            errorCode: model.errorCode,
+            retryable: model.error?.retryable ?? null,
+          });
+          expect(stored).not.toHaveProperty('rawScore');
+          expect(stored).not.toHaveProperty('localization');
+        }
+      }
+      if (status === 202) {
+        expect(response.body.result).toMatchObject({
+          status: saved!.status,
+          errorCode: saved!.errorCode,
+          completedAt: saved!.completedAt!.toISOString(),
+          aiGenerationScore: saved!.aiGenerationScore,
+          reasons: saved!.reasons,
+          modelVersion: saved!.modelVersion,
+        });
+      }
+      expect(JSON.stringify(response.body)).not.toMatch(
+        /rawScore|localization/,
+      );
+      expect(usage.reserveAiUsage).toHaveBeenCalledTimes(1);
+      expect(usage.releaseAiUsage).toHaveBeenCalledTimes(
+        status === 503 ? 1 : 0,
+      );
+    },
+  );
+  it('upserts repeated model results without duplicates and retrieves the latest stored values', async () => {
+    const row = await repository.create(
+      'development-user',
+      'duplicate-test',
+      new Date(Date.now() + 10000),
+    );
+    const models = {
+      status: 'COMPLETED' as const,
+      generation: result(),
+      manipulation: result(),
+    };
+    await repository.completeV1(row.id, models, new Date());
+    const first = await repository.findWithModelResults(row.id);
+    const completedAt = new Date();
+    models.manipulation = {
+      ...result(),
+      decision: 'MANIPULATION_SUSPECTED',
+      displayScore: 99,
+    };
+    await repository.completeV1(row.id, models, completedAt);
+    await repository.completeV1(row.id, models, completedAt);
+    const saved = await repository.findWithModelResults(row.id);
+    expect(saved!.modelResults).toHaveLength(2);
+    expect(saved!.modelResults.map((model) => model.id).sort()).toEqual(
+      first!.modelResults.map((model) => model.id).sort(),
+    );
+    expect(
+      await prisma.analysisModelResult.count({ where: { analysisId: row.id } }),
+    ).toBe(2);
+    const generation = saved!.modelResults.find(
+      (model) => model.kind === 'GENERATION',
+    )!;
+    const manipulation = saved!.modelResults.find(
+      (model) => model.kind === 'MANIPULATION',
+    )!;
+    expect(manipulation).toMatchObject(models.manipulation);
+    expect(generation).toMatchObject(models.generation);
+    expect(saved!.completedAt).toEqual(completedAt);
+    expect(calculateOverallResult(generation, manipulation).decision).toBe(
+      'GENERATION_OR_MANIPULATION_SUSPECTED',
+    );
+  });
+  it('returns null from repository for a missing analysisId', async () => {
+    expect(await repository.findWithModelResults(randomUUID())).toBeNull();
   });
   it('supports History ordering, pagination, recent three and summary detail with existing models', async () => {
     const userId = `history-${randomUUID()}`;
