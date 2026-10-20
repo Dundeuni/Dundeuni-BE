@@ -10,8 +10,8 @@ AI 생성·변조 가능성과 사기 위험은 하나의 점수로 합치지 �
 모든 요청은 임시 사용자 `development-user`로 저장한다. 로그인 구현 후 Guard와 인증 사용자 ID를 복원한다.
 
 요청은 `multipart/form-data`이며 필드는 `type=IMAGE`, `file`이다.
-P0 `AnalysisType`은 IMAGE/TEXT/URL이지만 TEXT/URL은 현재 400으로 거부한다.
-TEXT/URL 요청의 오류 메시지는 현재 IMAGE만 지원한다는 점을 명시한다.
+P0 `AnalysisType`은 IMAGE/TEXT/URL이다. IMAGE는 multipart, TEXT는 JSON을 지원하며 URL은 400으로 거부한다.
+TEXT 요청·응답은 문서 하단 Issue #13 절을 따른다.
 JPEG(`image/jpeg`, `.jpg`/`.jpeg`)와 PNG(`image/png`, `.png`)만 허용한다.
 MIME, 확장자, 파일 시그니처 및 크기를 확인한다. 전체 이미지 디코딩 검증은 실제 Provider 연결 시 필요하다.
 `ANALYSIS_MAX_FILE_BYTES`로 상한을 설정한다. `.env.example`의 10 MiB는 개발 제안값이며 운영 정책 확정이 필요하다.
@@ -99,7 +99,7 @@ IMAGE 유형+MIME+이미지 바이트 SHA-256을 requestHash로 저장하지만 
 - `AnalysisUsageService`: IMAGE 1회 예약/차감. analysisId 기준 중복 방지와 실패 복구를 실제 Usage 시스템에 연결. 현재 차감 없음.
 - 실제 Usage와 Analysis 간 원자성/실패 복구 정책 확정. 구독 시스템은 이번 범위에서 구현하지 않음.
 - aiRiskLevel enum, 인증 issuer/audience, 파일 크기, 기록 동의·보관·삭제 정책 확정.
-- TEXT/URL 분석과 GET /api/analysis/{analysisId}는 후속 구현.
+- TEXT AI 연동은 #96, URL 분석과 GET /api/analysis/{analysisId}는 후속 구현.
 
 ### 설치/검증
 
@@ -598,3 +598,74 @@ AI 실행 1회, Usage 예약 호출 1회였다. 동일 키 재사용/충돌/실�
 준비된 격리 DB의 비공개 연결 상태 파일이 있으면 `node scripts/pb23/test.cjs`로
 DB suite까지 포함한 `npm test -- --runInBand`를 실행한다. 일반 npm test에서는 DB suite가 opt-in이다.
 자세한 비교표·SQL 근거·백업 위치는 `docs/PB-23-report.md`를 참조한다.
+
+## Issue #13 — POST /api/analysis — TEXT
+
+`Content-Type: application/json`으로 다음을 전송한다. IMAGE multipart 요청과 응답은 유지한다.
+임시 사용자 development-user는 그대로 사용하며 실제 인증은 이번 범위가 아니다.
+
+```json
+{ "type": "TEXT", "text": "  이 메시지가 의심스러워요.  " }
+```
+
+trim 후 문자열만 허용하며 Unicode 코드 포인트 기준 5~3,000자다.
+필드 누락/null/숫자/배열/객체/빈 문자열/공백/길이 초과는 COMMON400이며 DB에 저장하지 않는다.
+TEXT multipart와 TEXT의 Idempotency-Key도 COMMON400이다. IMAGE의 기존 멱등성 정책은 유지한다.
+키 없는 정상 TEXT 요청은 매번 별도 분석 요청을 생성한다.
+
+HTTP 202 응답 예시:
+
+```json
+{
+  "isSuccess": true,
+  "code": "ANALYSIS202",
+  "message": "분석 요청 생성에 성공했습니다.",
+  "result": {
+    "analysisId": "9dca5a1c-9736-43b1-9b7c-fad6b9ce7e72",
+    "type": "TEXT",
+    "status": "QUEUED",
+    "textPreview": "이 메시지가 의심스러워요.",
+    "createdAt": "2026-10-20T00:00:00.000Z",
+    "updatedAt": "2026-10-20T00:00:00.000Z",
+    "expiresAt": "2026-11-19T00:00:00.000Z"
+  }
+}
+```
+
+기존 Prisma Analysis를 재사용하며 id는 Prisma UUID 기본값이다. createdAt/updatedAt을 같은 시각으로
+생성하고 expiresAt은 생성 시각 + 30×24시간으로 고정한다. IMAGE 보관 설정과 독립적이다.
+updatedAt은 Prisma @updatedAt으로 후속 Prisma 수정에 맞춰 갱신한다. 직접 SQL 갱신에는 이 기능이 적용되지 않는다.
+실제 AI API/Usage/백그라운드 작업은 호출하지 않는다. QUEUED는 요청 접수 상태이며 자동 실행 큐가 있다는 뜻이 아니다.
+점수·위험도·근거 등 임의 분석 결과를 만들거나 TEXT 응답에 넣지 않는다.
+DB 저장 오류는 원문/내부 오류를 포함하지 않는 COMMON500으로 반환한다.
+
+### 원문·이력·만료
+
+원문은 요청 메모리에서만 다룬다. DB/로그/큐/응답에 원문 필드를 저장하지 않는다.
+trim한 텍스트의 최초 200 코드 포인트를 textPreview에 저장하고, 유형을 구분한 SHA-256 requestHash를 저장한다.
+200자 이하인 입력은 미리보기 자체가 전체 내용과 같을 수 있으며 개인정보가 포함될 수 있다.
+사용자와 합의한 미리보기 보관 정책이며, 서비스 운영 전 동의 정책은 별도로 마련해야 한다.
+
+AnalysisRepository.findActiveTextForUser는 id + userId + type=TEXT + expiresAt > now를 모두 검사한다.
+정확히 만료 시각인 기록도 제외하며, 만료/다른 사용자/미존재는 조회 결과 null이다.
+향후 이력·상세 API는 이 필터를 적용하고 원문을 복원하거나 응답에 넣지 않아야 한다.
+이번에는 GET API와 실제 만료 데이터 삭제 작업을 추가하지 않는다.
+
+### Migration
+
+`20261020000000_text_analysis_input`은 nullable VARCHAR(200) textPreview와 updatedAt을 추가한다.
+기존 행의 updatedAt은 createdAt으로 채워 보존하며, 기존 키/상태/결과/제약을 변경하지 않는다.
+이후 updatedAt은 NOT NULL/DEFAULT CURRENT_TIMESTAMP로 설정한다.
+이번 작업에서는 migration 파일만 작성하고 DB에 적용하지 않았다. 새 코드 배포 전 적용이 필요하다.
+
+### #96 연동 지점
+
+`text-analysis.input.ts`의 normalizeTextInput을 공통 검증에 재사용한다.
+TextAnalysisInput은 `{ analysisId, userId, text }`, TextAnalysisProvider는
+`analyze(input, signal: AbortSignal): Promise<unknown>` 포트다. 결과 계약은 #96에서 확정해야 한다.
+현재 이 포트의 구현·등록·호출은 없다. #96은 AnalysisService.createText의 저장 이후 지점에서
+요청 메모리에 있는 정규화 원문을 넘기고, 승인된 결과 계약과 상태 전이·시간초과·Usage 정책을 추가해야 한다.
+
+현재 정책에서는 비동기 Worker가 DB에서 원문을 읽을 수 없다. #96이 실제 비동기 처리를 필요로 하면
+원문 보관 동의/암호화/보관 기간/삭제 정책이나 별도의 단기 전달 방식을 먼저 결정해야 한다.
+이력 미리보기를 AI 입력 원문으로 대체하면 안 된다.

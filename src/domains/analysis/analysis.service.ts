@@ -7,6 +7,7 @@ import { ApiError } from '../../common/http/api-error';
 import { AnalysisRepository } from './analysis.repository';
 import { AnalysisUsageService } from './analysis-usage.service';
 import { ImageAnalysisService } from './image-analysis.service';
+import { normalizeTextInput } from './text-analysis.input';
 
 @Injectable()
 export class AnalysisService {
@@ -17,6 +18,38 @@ export class AnalysisService {
     private readonly usage: AnalysisUsageService,
     private readonly config: ConfigService,
   ) {}
+
+  async createText(userId: string, input: unknown) {
+    const text = normalizeTextInput(input);
+    const requestHash = createHash('sha256')
+      .update('TEXT\0')
+      .update(text)
+      .digest('hex');
+    const textPreview = Array.from(text).slice(0, 200).join('');
+    try {
+      const analysis = await this.repository.createText(
+        userId,
+        requestHash,
+        textPreview,
+      );
+      return {
+        isSuccess: true,
+        code: 'ANALYSIS202',
+        message: '분석 요청 생성에 성공했습니다.',
+        result: {
+          analysisId: analysis.id,
+          type: analysis.type,
+          status: analysis.status,
+          textPreview: analysis.textPreview,
+          createdAt: analysis.createdAt.toISOString(),
+          updatedAt: analysis.updatedAt.toISOString(),
+          expiresAt: analysis.expiresAt.toISOString(),
+        },
+      };
+    } catch {
+      throw new ApiError(500, 'COMMON500', '분석 요청 저장에 실패했습니다.');
+    }
+  }
 
   async create(
     userId: string,

@@ -48,6 +48,8 @@ describe('IMAGE analysis API', () => {
           summarizedAt: null,
           errorCode: null,
           createdAt: new Date(),
+          updatedAt: new Date(),
+          textPreview: null,
           completedAt: null,
         };
         rows.set(row.id, row);
@@ -173,18 +175,15 @@ describe('IMAGE analysis API', () => {
       ),
     ).toBe(true);
   });
-  it.each(['TEXT', 'URL', 'SCREEN', 'VIDEO', 'invalid'])(
-    'rejects %s',
-    async (type) => {
-      const response = await post()
-        .field('type', type)
-        .attach('file', png(), 'sample.png')
-        .expect(400);
-      expect(response.body.code).toBe('COMMON400');
-      expect(response.body.message).toContain('현재 IMAGE 분석만 지원');
-      expect(repository.create).not.toHaveBeenCalled();
-    },
-  );
+  it.each(['URL', 'SCREEN', 'VIDEO', 'invalid'])('rejects %s', async (type) => {
+    const response = await post()
+      .field('type', type)
+      .attach('file', png(), 'sample.png')
+      .expect(400);
+    expect(response.body.code).toBe('COMMON400');
+    expect(response.body.message).toContain('현재 IMAGE/TEXT 분석만 지원');
+    expect(repository.create).not.toHaveBeenCalled();
+  });
   it('rejects missing type', async () => {
     await post().attach('file', png(), 'sample.png').expect(400);
   });
@@ -545,7 +544,20 @@ describe('IMAGE analysis API', () => {
     expect(operation.security ?? []).toEqual([]);
     expect(operation.requestBody).toMatchObject({
       content: {
-        'multipart/form-data': { schema: { required: ['type', 'file'] } },
+        'multipart/form-data': {
+          schema: {
+            oneOf: expect.arrayContaining([
+              expect.objectContaining({ required: ['type', 'file'] }),
+            ]),
+          },
+        },
+        'application/json': {
+          schema: {
+            oneOf: expect.arrayContaining([
+              expect.objectContaining({ required: ['type', 'text'] }),
+            ]),
+          },
+        },
       },
     });
     expect(operation.parameters ?? []).toEqual(

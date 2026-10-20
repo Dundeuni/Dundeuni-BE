@@ -63,6 +63,8 @@ model Analysis {
   modelVersion      String?
   errorCode         String?
   createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @default(now()) @updatedAt
+  textPreview       String?        @db.VarChar(200)
   completedAt       DateTime?
   expiresAt         DateTime
 

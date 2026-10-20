@@ -23,7 +23,7 @@ import {
 // import { UseGuards, Req } from '@nestjs/common';
 // import { ApiBearerAuth } from '@nestjs/swagger';
 // import { AccessTokenGuard, AuthenticatedRequest } from '../../common/auth/access-token.guard';
-import { ApiErrorFilter } from '../../common/http/api-error';
+import { ApiError, ApiErrorFilter } from '../../common/http/api-error';
 import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
 import { AnalysisService } from './analysis.service';
@@ -41,16 +41,16 @@ export class AnalysisController {
   @HttpCode(202)
   @UseInterceptors(UploadedImageCleanupInterceptor, FileInterceptor('file'))
   @ApiOperation({
-    summary: '이미지 분석 요청 생성',
+    summary: '이미지 또는 텍스트 분석 요청 생성',
     description:
-      'P0 유형 IMAGE/TEXT/URL 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. AI_PROVIDER=mock은 CuRe/TruFor v0.2 개발 전용 가상 분석이며, AI_PROVIDER=http은 Bearer 서비스 인증을 사용하는 내부 HTTP 어댑터입니다. 서버 설정으로만 전환합니다. 부분 실패는 성공 모델을 보존하며 202, 전체 실패/타임아웃은 503. 위험도 매핑 미확정 시 null.',
+      'IMAGE는 기존 multipart/form-data이며 부분 실패 202, 전체 실패/타임아웃 503입니다. TEXT는 application/json으로 요청하며 AI 호출 없이 QUEUED/202로 저장합니다. TEXT는 trim 후 5~3,000자, 미리보기 최대 200자만 보관하며 생성 후 30일 만료입니다. 원문은 저장하지 않습니다. URL은 미지원입니다.',
   })
-  @ApiConsumes('multipart/form-data')
+  @ApiConsumes('multipart/form-data', 'application/json')
   @ApiHeader({
     name: 'Idempotency-Key',
     required: false,
     description:
-      '1~128자 공백 없는 ASCII. 사용자별 키. 완료는 202 재사용, 처리 중/만료/내용 충돌은 COMMON409. 실패는 기존 오류 재사용. 새 분석에는 새 키 사용.',
+      'IMAGE 전용, TEXT에서 전달 시 COMMON400. 1~128자 공백 없는 ASCII. 사용자별 키. 완료는 202 재사용, 처리 중/만료/내용 충돌은 COMMON409. 실패는 기존 오류 재사용. 새 분석에는 새 키 사용.',
   })
   @ApiResponse({
     status: 409,
@@ -58,20 +58,38 @@ export class AnalysisController {
   })
   @ApiBody({
     schema: {
-      type: 'object',
-      required: ['type', 'file'],
-      properties: {
-        type: {
-          type: 'string',
-          enum: ['IMAGE'],
-          description: '현재 IMAGE만 허용. TEXT/URL 미구현.',
+      oneOf: [
+        {
+          type: 'object',
+          required: ['type', 'file'],
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['IMAGE'],
+              description: 'multipart/form-data 전용',
+            },
+            file: {
+              type: 'string',
+              format: 'binary',
+              description: 'JPEG/PNG. 기존 파일 크기 제한 적용',
+            },
+          },
         },
-        file: {
-          type: 'string',
-          format: 'binary',
-          description: 'JPEG/PNG. ANALYSIS_MAX_FILE_BYTES 크기 제한 적용.',
+        {
+          type: 'object',
+          required: ['type', 'text'],
+          properties: {
+            type: { type: 'string', enum: ['TEXT'] },
+            text: {
+              type: 'string',
+              minLength: 5,
+              maxLength: 3000,
+              description: 'application/json 전용. trim 후 검증, 원문 미보관.',
+              example: '이 메시지가 의심스러워요.',
+            },
+          },
         },
-      },
+      ],
     },
   })
   @ApiResponse({
@@ -120,6 +138,17 @@ export class AnalysisController {
               nullable: true,
             },
             expiresAt: { type: 'string', format: 'date-time' },
+            updatedAt: {
+              type: 'string',
+              format: 'date-time',
+              description: 'TEXT 응답에 포함',
+            },
+            textPreview: {
+              type: 'string',
+              maxLength: 200,
+              description:
+                'TEXT 응답에 포함. AI 결과 필드는 TEXT 응답에서 제외',
+            },
           },
         },
       },
@@ -128,7 +157,7 @@ export class AnalysisController {
   @ApiResponse({
     status: 400,
     description:
-      'COMMON400: type/file 누락, TEXT/URL 또는 잘못된 요청, AI 입력 오류(400/422)',
+      'COMMON400: 잘못된 type/file/text 또는 전송 형식, TEXT의 Idempotency-Key, AI 입력 오류(400/422)',
   })
   // @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
   @ApiResponse({
@@ -148,10 +177,26 @@ export class AnalysisController {
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   create(
     // @Req() request: AuthenticatedRequest,
-    @Body() _body: CreateAnalysisDto,
+    @Body() body: CreateAnalysisDto,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Headers('idempotency-key') idempotencyKey?: string,
+    @Headers('content-type') contentType?: string,
   ) {
+    if (body.type === 'TEXT') {
+      if (file || !/^application\/json(?:\s*;|$)/i.test(contentType ?? ''))
+        throw new ApiError(
+          400,
+          'COMMON400',
+          'TEXT는 application/json으로 요청해야 합니다.',
+        );
+      if (idempotencyKey !== undefined)
+        throw new ApiError(
+          400,
+          'COMMON400',
+          'TEXT 요청은 Idempotency-Key를 지원하지 않습니다.',
+        );
+      return this.service.createText('development-user', body.text);
+    }
     // return this.service.create(request.user.id, file);
     return this.service.create('development-user', file, idempotencyKey);
   }

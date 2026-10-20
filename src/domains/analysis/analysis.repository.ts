@@ -12,10 +12,42 @@ import {
   ImageModelPublicResultDto,
 } from './image-analysis-v1.dto';
 import { ImageAnalysisResult } from './image-analysis.service';
+import { TEXT_RETENTION_MS } from './text-analysis.input';
 
 @Injectable()
 export class AnalysisRepository {
   constructor(private readonly prisma: PrismaService) {}
+  createText(userId: string, requestHash: string, textPreview: string) {
+    const createdAt = new Date();
+    return this.prisma.analysis.create({
+      data: {
+        userId,
+        requestHash,
+        textPreview,
+        type: AnalysisType.TEXT,
+        status: 'QUEUED',
+        createdAt,
+        updatedAt: createdAt,
+        expiresAt: new Date(createdAt.getTime() + TEXT_RETENTION_MS),
+      },
+    });
+  }
+
+  /** History foundation: expired/other-user records are indistinguishable from missing. */
+  findActiveTextForUser(id: string, userId: string, now = new Date()) {
+    return this.prisma.analysis.findFirst({
+      where: { id, userId, type: AnalysisType.TEXT, expiresAt: { gt: now } },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        textPreview: true,
+        createdAt: true,
+        updatedAt: true,
+        expiresAt: true,
+      },
+    });
+  }
   create(userId: string, requestHash: string, expiresAt: Date) {
     return this.prisma.analysis.create({
       data: {
