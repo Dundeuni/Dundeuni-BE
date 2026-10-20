@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Analysis } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
@@ -11,6 +11,7 @@ import { ImageAnalysisService } from './image-analysis.service';
 
 @Injectable()
 export class AnalysisService {
+  private readonly logger = new Logger(AnalysisService.name);
   constructor(
     private readonly repository: AnalysisRepository,
     private readonly imageAnalysis: ImageAnalysisService,
@@ -18,8 +19,21 @@ export class AnalysisService {
     private readonly config: ConfigService,
   ) {}
 
-  async create(userId: string, file: Express.Multer.File | undefined) {
+  async create(
+    userId: string,
+    file: Express.Multer.File | undefined,
+    idempotencyKey?: string,
+  ) {
     try {
+      if (
+        idempotencyKey !== undefined &&
+        !/^[\x21-\x7e]{1,128}$/.test(idempotencyKey)
+      )
+        throw new ApiError(
+          400,
+          'COMMON400',
+          'Idempotency-Key는 1~128자의 공백 없는 ASCII 문자열이어야 합니다.',
+        );
       if (!file || file.size === 0)
         throw new ApiError(400, 'COMMON400', '이미지 파일이 필요합니다.');
       const maxSize = this.positiveConfig('ANALYSIS_MAX_FILE_BYTES');
@@ -67,7 +81,58 @@ export class AnalysisService {
       const expiresAt = new Date(
         Date.now() + this.positiveConfig('ANALYSIS_RETENTION_SECONDS') * 1000,
       );
-      let analysis = await this.repository.create(userId, hash, expiresAt);
+      const claim =
+        idempotencyKey === undefined
+          ? {
+              analysis: await this.repository.create(userId, hash, expiresAt),
+              claimed: true,
+            }
+          : await this.repository.claim(
+              userId,
+              hash,
+              expiresAt,
+              idempotencyKey,
+            );
+      let analysis = claim.analysis;
+      if (!claim.claimed) {
+        if (analysis.requestHash !== hash)
+          throw new ApiError(
+            409,
+            'COMMON409',
+            '같은 멱등성 키로 다른 요청을 보낼 수 없습니다.',
+          );
+        if (analysis.expiresAt.getTime() <= Date.now())
+          throw new ApiError(
+            409,
+            'COMMON409',
+            '만료된 분석 요청입니다. 새 멱등성 키를 사용해 주세요.',
+          );
+        if (analysis.status === 'COMPLETED') return this.response(analysis);
+        if (analysis.status === 'FAILED') {
+          const statuses: Record<string, number> = {
+            COMMON400: 400,
+            COMMON413: 413,
+            COMMON415: 415,
+            USAGE429: 429,
+            ANALYSIS503: 503,
+            COMMON500: 500,
+          };
+          const code =
+            analysis.errorCode && statuses[analysis.errorCode]
+              ? analysis.errorCode
+              : 'COMMON500';
+          throw new ApiError(
+            statuses[code],
+            code,
+            '이전 분석 요청이 실패했습니다. 새 분석에는 새 멱등성 키를 사용해 주세요.',
+          );
+        }
+        throw new ApiError(
+          409,
+          'COMMON409',
+          '분석 처리 중입니다. 잠시 후 같은 키로 다시 요청해 주세요.',
+        );
+      }
       let reserved = false;
       let modelFailureSaved = false;
       try {
@@ -123,8 +188,15 @@ export class AnalysisService {
         try {
           if (!modelFailureSaved)
             await this.repository.fail(analysis.id, body.code);
-        } finally {
-          if (reserved) await this.usage.releaseAiUsage(userId, analysis.id);
+        } catch {
+          this.logger.error('Failed to persist analysis failure state');
+        }
+        if (reserved) {
+          try {
+            await this.usage.releaseAiUsage(userId, analysis.id);
+          } catch {
+            this.logger.error('Failed to release analysis usage reservation');
+          }
         }
         throw apiError;
       }

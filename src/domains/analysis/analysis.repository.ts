@@ -26,6 +26,37 @@ export class AnalysisRepository {
       },
     });
   }
+  /** The unique insert is the execution claim; losers never reserve usage or call AI. */
+  async claim(
+    userId: string,
+    requestHash: string,
+    expiresAt: Date,
+    idempotencyKey: string,
+  ) {
+    try {
+      const analysis = await this.prisma.analysis.create({
+        data: {
+          userId,
+          requestHash,
+          expiresAt,
+          idempotencyKey,
+          type: AnalysisType.IMAGE,
+        },
+      });
+      return { analysis, claimed: true };
+    } catch (error) {
+      if (
+        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+        error.code !== 'P2002'
+      )
+        throw error;
+      const analysis = await this.prisma.analysis.findUnique({
+        where: { userId_idempotencyKey: { userId, idempotencyKey } },
+      });
+      if (!analysis) throw error;
+      return { analysis, claimed: false };
+    }
+  }
   analyzing(id: string) {
     return this.prisma.analysis.update({
       where: { id },

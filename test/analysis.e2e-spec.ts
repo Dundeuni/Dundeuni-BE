@@ -34,6 +34,7 @@ describe('IMAGE analysis API', () => {
           id: randomUUID(),
           userId,
           requestHash,
+          idempotencyKey: null,
           expiresAt,
           type: 'IMAGE',
           status: 'QUEUED',
@@ -52,6 +53,25 @@ describe('IMAGE analysis API', () => {
         };
         rows.set(row.id, row);
         return row;
+      },
+    ),
+    claim: jest.fn(
+      async (
+        userId: string,
+        requestHash: string,
+        expiresAt: Date,
+        idempotencyKey: string,
+      ): Promise<{ analysis: Analysis; claimed: boolean }> => {
+        const existing = [...rows.values()].find(
+          (row) =>
+            row.userId === userId && row.idempotencyKey === idempotencyKey,
+        );
+        if (existing) return { analysis: existing, claimed: false };
+        const pending = repository.create(userId, requestHash, expiresAt);
+        // In-memory unique insert emulates the DB claim before yielding.
+        const row = [...rows.values()].at(-1)!;
+        row.idempotencyKey = idempotencyKey;
+        return { analysis: await pending, claimed: true };
       },
     ),
     analyzing: jest.fn(async (id: string) =>
@@ -284,7 +304,7 @@ describe('IMAGE analysis API', () => {
     expect(rows.size).toBe(2);
     expect(usage.reserveAiUsage).toHaveBeenCalledTimes(2);
   });
-  it('ignores an old key header when submitting different images', async () => {
+  it('rejects reuse of a key for different images', async () => {
     await post()
       .set('Idempotency-Key', '1')
       .field('type', 'IMAGE')
@@ -294,8 +314,67 @@ describe('IMAGE analysis API', () => {
       .set('Idempotency-Key', '1')
       .field('type', 'IMAGE')
       .attach('file', Buffer.concat([png(), Buffer.from([2])]), 'sample.png')
-      .expect(202);
+      .expect(409);
+    expect(rows.size).toBe(1);
+  });
+  const keyedUpload = (key: string) =>
+    post()
+      .set('Idempotency-Key', key)
+      .field('type', 'IMAGE')
+      .attach('file', png(), 'sample.png');
+  it('reuses a completed response without duplicate AI or usage', async () => {
+    const first = await keyedUpload('repeat').expect(202);
+    const second = await keyedUpload('repeat').expect(202);
+    expect(second.body).toEqual(first.body);
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
+    expect(usage.reserveAiUsage).toHaveBeenCalledTimes(1);
+  });
+  it('allows identical images under different keys', async () => {
+    await keyedUpload('one').expect(202);
+    await keyedUpload('two').expect(202);
+    expect(provider.analyze).toHaveBeenCalledTimes(2);
     expect(rows.size).toBe(2);
+  });
+  it('returns 409 for concurrent in-progress duplicate without executing twice', async () => {
+    let finish!: (value: unknown) => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    provider.analyze.mockImplementationOnce(() => {
+      entered();
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    });
+    const first = keyedUpload('concurrent').then((response) => response);
+    await started;
+    await keyedUpload('concurrent').expect(409);
+    finish({
+      aiGenerationScore: 50,
+      aiRiskLevel: 'CAUTION',
+      reasons: [],
+      modelVersion: 'test',
+    });
+    expect((await first).status).toBe(202);
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
+    expect(usage.reserveAiUsage).toHaveBeenCalledTimes(1);
+    expect(rows.size).toBe(1);
+  });
+  it('replays failed requests without retrying AI or usage', async () => {
+    provider.analyze.mockRejectedValueOnce(new Error('failure'));
+    await keyedUpload('failed').expect(503);
+    await keyedUpload('failed').expect(503);
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
+    expect(usage.reserveAiUsage).toHaveBeenCalledTimes(1);
+    expect(usage.releaseAiUsage).toHaveBeenCalledTimes(1);
+  });
+  it('rejects expired keys and invalid keys', async () => {
+    await keyedUpload('expired').expect(202);
+    [...rows.values()][0].expiresAt = new Date(0);
+    await keyedUpload('expired').expect(409);
+    await keyedUpload('contains space').expect(400);
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
   });
   it('persists Provider failure and allows a fresh retry', async () => {
     provider.analyze.mockRejectedValueOnce(new Error('Provider unavailable'));
@@ -324,7 +403,38 @@ describe('IMAGE analysis API', () => {
   it('releases a reservation even when failure persistence also fails', async () => {
     provider.analyze.mockRejectedValueOnce(new Error('Provider unavailable'));
     repository.fail.mockRejectedValueOnce(new Error('Database unavailable'));
-    await upload().expect(500);
+    await upload().expect(503);
+    expect(usage.releaseAiUsage).toHaveBeenCalledTimes(1);
+  });
+  it('preserves the original error when usage release fails', async () => {
+    provider.analyze.mockRejectedValueOnce(new Error('private upstream trace'));
+    usage.releaseAiUsage.mockRejectedValueOnce(
+      new Error('private usage trace'),
+    );
+    const response = await upload().expect(503);
+    expect(response.body.code).toBe('ANALYSIS503');
+    expect(JSON.stringify(response.body)).not.toContain('private');
+    expect([...rows.values()][0].status).toBe('FAILED');
+  });
+  it('ignores a provider response arriving after timeout', async () => {
+    let resolve!: (value: unknown) => void;
+    provider.analyze.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    await upload().expect(503);
+    resolve({
+      aiGenerationScore: 50,
+      aiRiskLevel: 'CAUTION',
+      reasons: [],
+      modelVersion: 'late',
+    });
+    await new Promise<void>((done) => setImmediate(done));
+    expect([...rows.values()][0].status).toBe('FAILED');
+    expect(repository.complete).not.toHaveBeenCalled();
+    expect(repository.completeV1).not.toHaveBeenCalled();
     expect(usage.releaseAiUsage).toHaveBeenCalledTimes(1);
   });
   it('handles Usage quota exceeded', async () => {
@@ -494,7 +604,7 @@ describe('IMAGE analysis API', () => {
         'multipart/form-data': { schema: { required: ['type', 'file'] } },
       },
     });
-    expect(operation.parameters ?? []).not.toEqual(
+    expect(operation.parameters ?? []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: 'Idempotency-Key' }),
       ]),

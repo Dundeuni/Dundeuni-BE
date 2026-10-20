@@ -298,6 +298,7 @@ describe('v0.2 real HTTP transport with mocked HTTP', () => {
     if (!(error instanceof ApiError))
       throw new Error('Expected a sanitized ApiError');
     expect(error.getStatus()).toBe(503);
+    expect(error).toHaveProperty('failureKind', 'NETWORK');
     expect(error.getResponse()).toEqual({
       isSuccess: false,
       code: 'ANALYSIS503',
@@ -339,7 +340,7 @@ describe('v0.2 real HTTP transport with mocked HTTP', () => {
     const file = makeFile();
     await expect(
       new HttpImageAnalysisProvider(config).analyze(file, context(file)),
-    ).rejects.toMatchObject({ status: 503 });
+    ).rejects.toMatchObject({ status: 503, failureKind: 'TIMEOUT' });
     expect(signal!.aborted).toBe(true);
   });
   it('does not send a request when already aborted or when file exceeds 10 MiB', async () => {

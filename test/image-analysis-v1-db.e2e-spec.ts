@@ -63,7 +63,14 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     );
   }
   beforeAll(async () => {
-    connection = new URL(parse(readFileSync('.env')).DATABASE_URL);
+    connection = new URL(
+      process.env.PB23_DB_URL ?? parse(readFileSync('.env')).DATABASE_URL,
+    );
+    if (
+      process.env.PB23_DB_URL &&
+      !/^pb23_test_\d+$/.test(connection.pathname.slice(1))
+    )
+      throw new Error('PB23 isolated database required');
     if (!['localhost', '127.0.0.1'].includes(connection.hostname))
       throw new Error('Local test database required');
     const migrations = readdirSync('prisma/migrations')
