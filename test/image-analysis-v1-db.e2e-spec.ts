@@ -511,7 +511,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       usage,
       config,
     );
-    const buffer = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const buffer = PNG.sync.write(new PNG({ width: 2, height: 2 }));
     const file = {
       buffer,
       size: buffer.length,
@@ -738,6 +738,165 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       await worker.onModuleDestroy();
     },
   );
+  it('supports History ordering, pagination, recent three and summary detail with existing models', async () => {
+    const userId = `history-${randomUUID()}`;
+    const createdAt = new Date('2026-10-15T00:00:00Z');
+    const expiresAt = new Date(Date.now() + 60000);
+    const ids = Array.from({ length: 4 }, () => randomUUID())
+      .sort()
+      .reverse();
+    for (const id of ids) {
+      await prisma.analysis.create({
+        data: {
+          id,
+          userId,
+          type: 'IMAGE',
+          status: 'COMPLETED',
+          requestHash: 'history-test',
+          createdAt,
+          expiresAt,
+          summaryStatus: 'COMPLETED',
+          summary: '저장된 요약',
+          summaryModel: 'test-model',
+          summarizedAt: createdAt,
+        },
+      });
+    }
+    await prisma.analysis.create({
+      data: {
+        userId,
+        type: 'TEXT',
+        status: 'QUEUED',
+        requestHash: 'pending',
+        createdAt: new Date(createdAt.getTime() + 1000),
+        expiresAt,
+      },
+    });
+    await prisma.analysis.create({
+      data: {
+        userId,
+        type: 'IMAGE',
+        status: 'COMPLETED',
+        requestHash: 'expired',
+        createdAt: new Date(createdAt.getTime() + 2000),
+        expiresAt: new Date(0),
+        summaryStatus: 'COMPLETED',
+      },
+    });
+    await prisma.analysis.create({
+      data: {
+        userId: `${userId}-other`,
+        type: 'IMAGE',
+        status: 'COMPLETED',
+        requestHash: 'other-user',
+        createdAt,
+        expiresAt,
+        summaryStatus: 'COMPLETED',
+      },
+    });
+    const where = {
+      userId,
+      expiresAt: { gt: new Date() },
+      summaryStatus: 'COMPLETED' as const,
+    };
+    const orderBy = [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
+    const first = await prisma.analysis.findMany({ where, orderBy, take: 3 });
+    expect(first.map((row) => row.id)).toEqual(ids.slice(0, 3));
+    const next = await prisma.analysis.findMany({
+      where,
+      orderBy,
+      cursor: { id: first[2].id },
+      skip: 1,
+      take: 3,
+    });
+    expect(next.map((row) => row.id)).toEqual(ids.slice(3));
+    expect(await prisma.analysis.count({ where })).toBe(4);
+    const detail = await repository.findWithModelResults(ids[0]);
+    expect(detail).toMatchObject({
+      id: ids[0],
+      userId,
+      summaryStatus: 'COMPLETED',
+      summary: '저장된 요약',
+      summaryModel: 'test-model',
+      summarizedAt: createdAt,
+      modelResults: [],
+    });
+  });
+  it('enforces the model FK and unique key and reuses rows on repeated saves', async () => {
+    const row = await repository.create(
+      'schema-audit',
+      'hash',
+      new Date(Date.now() + 60000),
+    );
+    const payload = {
+      status: 'COMPLETED' as const,
+      generation: result(),
+      manipulation: result(),
+    };
+    await repository.saveModelResults(row.id, payload);
+    const before = (await repository.findWithModelResults(row.id))!;
+    await repository.saveModelResults(row.id, payload);
+    const after = (await repository.findWithModelResults(row.id))!;
+    expect(after.modelResults.map((model) => model.id).sort()).toEqual(
+      before.modelResults.map((model) => model.id).sort(),
+    );
+    expect(after.modelResults).toHaveLength(2);
+    await expect(
+      prisma.analysisModelResult.create({
+        data: { ...result(), analysisId: row.id, kind: 'GENERATION' },
+      }),
+    ).rejects.toMatchObject({ code: 'P2002' });
+    await expect(
+      prisma.analysisModelResult.create({
+        data: { ...result(), analysisId: randomUUID(), kind: 'GENERATION' },
+      }),
+    ).rejects.toMatchObject({ code: 'P2003' });
+  });
+  it('stores summary transitions without changing analysis or model data', async () => {
+    const row = await repository.create(
+      'schema-audit',
+      'hash',
+      new Date(Date.now() + 60000),
+    );
+    await repository.saveModelResults(row.id, {
+      status: 'COMPLETED',
+      generation: result(),
+      manipulation: null,
+    });
+    const before = (await repository.findWithModelResults(row.id))!;
+    const summarizedAt = new Date();
+    await repository.saveSummary(row.id, { status: 'PENDING' });
+    expect(await repository.findWithModelResults(row.id)).toMatchObject({
+      summaryStatus: 'PENDING',
+      summary: null,
+      summaryModel: null,
+      summarizedAt: null,
+    });
+    await repository.saveSummary(row.id, {
+      status: 'COMPLETED',
+      summary: '검증용 요약입니다.',
+      model: 'test-model',
+      summarizedAt,
+    });
+    expect(await repository.findWithModelResults(row.id)).toMatchObject({
+      summaryStatus: 'COMPLETED',
+      summary: '검증용 요약입니다.',
+      summaryModel: 'test-model',
+      summarizedAt,
+    });
+    await repository.saveSummary(row.id, { status: 'FAILED' });
+    const after = (await repository.findWithModelResults(row.id))!;
+    expect(after).toMatchObject({
+      summaryStatus: 'FAILED',
+      summary: null,
+      summaryModel: null,
+      summarizedAt: null,
+    });
+    expect(after.modelResults).toEqual(before.modelResults);
+    expect(after.status).toBe(before.status);
+    expect(after.completedAt).toEqual(before.completedAt);
+  });
+
   it('migration chain matches the Prisma schema', () => {
     const diff = spawnSync(
       process.execPath,
