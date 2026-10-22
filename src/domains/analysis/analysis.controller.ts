@@ -1,8 +1,12 @@
+import { analysisRequestBody } from './analysis.swagger';
+import { RequestUserGuard } from '../../common/auth/request-user.guard';
+import { Req, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '../../common/auth/access-token.guard';
 import {
   Body,
   Controller,
   HttpCode,
-  Headers,
   Post,
   UploadedFile,
   UseFilters,
@@ -19,20 +23,28 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-// TODO: 로그인 구현 후 AccessTokenGuard와 인증 사용자 ID를 복원한다.
-// import { UseGuards, Req } from '@nestjs/common';
-// import { ApiBearerAuth } from '@nestjs/swagger';
-// import { AccessTokenGuard, AuthenticatedRequest } from '../../common/auth/access-token.guard';
 import { ApiError, ApiErrorFilter } from '../../common/http/api-error';
 import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
 import { AnalysisService } from './analysis.service';
 
+function errorSchema(code: string) {
+  return {
+    type: 'object',
+    properties: {
+      isSuccess: { type: 'boolean', example: false },
+      code: { type: 'string', example: code },
+      message: { type: 'string' },
+      result: { type: 'object', nullable: true, example: null },
+    },
+  };
+}
+
 @ApiExtraModels(ImageModelsPublicResultDto)
 @ApiTags('Analysis')
-// @ApiBearerAuth()
+@ApiBearerAuth()
 @Controller('analysis')
-// @UseGuards(AccessTokenGuard)
+@UseGuards(RequestUserGuard)
 @UseFilters(ApiErrorFilter)
 export class AnalysisController {
   constructor(private readonly service: AnalysisService) {}
@@ -43,54 +55,21 @@ export class AnalysisController {
   @ApiOperation({
     summary: '이미지 또는 텍스트 분석 요청 생성',
     description:
-      'IMAGE는 기존 multipart/form-data이며 부분 실패 202, 전체 실패/타임아웃 503입니다. TEXT는 application/json으로 요청하며 AI 호출 없이 QUEUED/202로 저장합니다. TEXT는 trim 후 5~3,000자, 미리보기 최대 200자만 보관하며 생성 후 30일 만료입니다. 원문은 저장하지 않습니다. URL은 미지원입니다.',
+      'NODE_ENV=development에서만 인증을 우회하여 development-user로 저장합니다. production 및 그 외 환경은 JWT Bearer 필수이며 JWT sub로 저장합니다. IMAGE는 기존 multipart/form-data이며 부분 실패 202, 전체 실패/타임아웃 503입니다. TEXT 직접 입력은 application/json, 문자 캡처 OCR은 multipart/form-data의 type=TEXT, sourceType=SCREEN_CROP, file입니다. JSON TEXT는 sourceType=DIRECT 또는 생략을 지원합니다. 기본 모드는 AI 호출 없이 QUEUED/202이며 TEXT_AI_PROVIDER=http일 때 동기 AI 처리 후 202를 유지합니다. TEXT는 trim 후 5~3,000자, 미리보기 최대 200자만 보관하며 생성 후 30일 만료입니다. 원문은 저장하지 않습니다. URL은 미지원입니다.',
   })
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiHeader({
     name: 'Idempotency-Key',
     required: false,
     description:
-      'IMAGE 전용, TEXT에서 전달 시 COMMON400. 1~128자 공백 없는 ASCII. 사용자별 키. 완료는 202 재사용, 처리 중/만료/내용 충돌은 COMMON409. 실패는 기존 오류 재사용. 새 분석에는 새 키 사용.',
+      'IMAGE 및 TEXT AI HTTP 모드 지원. TEXT 기본 모드에서는 전달 시 COMMON400. 1~128자 공백 없는 ASCII. 사용자별 키. 완료는 202 재사용, 처리 중/만료/내용 충돌은 COMMON409. 실패는 기존 오류 재사용. 새 분석에는 새 키 사용.',
   })
   @ApiResponse({
     status: 409,
     description: 'COMMON409: 처리 중, 키/내용 충돌 또는 만료된 키',
   })
   @ApiBody({
-    schema: {
-      oneOf: [
-        {
-          type: 'object',
-          required: ['type', 'file'],
-          properties: {
-            type: {
-              type: 'string',
-              enum: ['IMAGE'],
-              description: 'multipart/form-data 전용',
-            },
-            file: {
-              type: 'string',
-              format: 'binary',
-              description: 'JPEG/PNG. 기존 파일 크기 제한 적용',
-            },
-          },
-        },
-        {
-          type: 'object',
-          required: ['type', 'text'],
-          properties: {
-            type: { type: 'string', enum: ['TEXT'] },
-            text: {
-              type: 'string',
-              minLength: 5,
-              maxLength: 3000,
-              description: 'application/json 전용. trim 후 검증, 원문 미보관.',
-              example: '이 메시지가 의심스러워요.',
-            },
-          },
-        },
-      ],
-    },
+    schema: analysisRequestBody.content['multipart/form-data'].schema,
   })
   @ApiResponse({
     status: 202,
@@ -105,7 +84,7 @@ export class AnalysisController {
           type: 'object',
           properties: {
             analysisId: { type: 'string', format: 'uuid' },
-            type: { type: 'string', enum: ['IMAGE', 'TEXT', 'URL'] },
+            type: { type: 'string', enum: ['IMAGE', 'TEXT'] },
             status: {
               type: 'string',
               enum: ['QUEUED', 'ANALYZING', 'COMPLETED', 'FAILED'],
@@ -143,11 +122,48 @@ export class AnalysisController {
               format: 'date-time',
               description: 'TEXT 응답에 포함',
             },
+            textResult: {
+              type: 'object',
+              nullable: true,
+              description:
+                'TEXT AI HTTP 모드의 text-risk-1.0 메타데이터. 원문·OCR·자유문구를 제외. riskScore는 0..1 미보정 분류 점수이며 riskLevel/phishingScore 변환 없음.',
+              properties: {
+                contractVersion: { type: 'string', enum: ['text-risk-1.0'] },
+                status: { type: 'string', enum: ['COMPLETED'] },
+                decision: {
+                  type: 'string',
+                  enum: ['normal', 'phishing', 'defer'],
+                },
+                riskScore: {
+                  type: 'number',
+                  nullable: true,
+                  minimum: 0,
+                  maximum: 1,
+                },
+                scoreScale: { type: 'string', enum: ['0..1'] },
+                scoreMeaning: {
+                  type: 'string',
+                  enum: ['UNCALIBRATED_CLASSIFIER_SCORE'],
+                },
+                requestId: { type: 'string', format: 'uuid' },
+                analysisId: { type: 'string', format: 'uuid' },
+                elementId: { type: 'string', format: 'uuid' },
+                sourceType: {
+                  type: 'string',
+                  enum: ['TEXT', 'IMAGE', 'SCREEN_CROP'],
+                },
+                modelName: { type: 'string' },
+                modelVersion: { type: 'string' },
+                policyVersion: { type: 'string' },
+                quality: { type: 'object', additionalProperties: true },
+                processingMs: { type: 'number', minimum: 0 },
+              },
+            },
             textPreview: {
               type: 'string',
               maxLength: 200,
               description:
-                'TEXT 응답에 포함. AI 결과 필드는 TEXT 응답에서 제외',
+                'TEXT 응답의 기존 미리보기. 캡처는 빈 문자열이며 OCR 원문 미포함',
             },
           },
         },
@@ -156,15 +172,25 @@ export class AnalysisController {
   })
   @ApiResponse({
     status: 400,
+    schema: errorSchema('COMMON400'),
     description:
       'COMMON400: 잘못된 type/file/text 또는 전송 형식, TEXT의 Idempotency-Key, AI 입력 오류(400/422)',
   })
-  // @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
+  @ApiResponse({
+    status: 401,
+    description: 'AUTH401: 개발 환경 외 토큰 없음/무효',
+    schema: errorSchema('AUTH401'),
+  })
   @ApiResponse({
     status: 413,
     description: 'COMMON413: 업로드 또는 AI 전송 파일·본문 크기 초과',
+    schema: errorSchema('COMMON413'),
   })
-  @ApiResponse({ status: 415, description: 'COMMON415: 지원하지 않는 이미지' })
+  @ApiResponse({
+    status: 415,
+    description: 'COMMON415: MIME/확장자/시그니처 불일치',
+    schema: errorSchema('COMMON415'),
+  })
   @ApiResponse({
     status: 429,
     description: 'USAGE429: 이용량 초과 (Usage 연동 예정)',
@@ -176,28 +202,49 @@ export class AnalysisController {
   })
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   create(
-    // @Req() request: AuthenticatedRequest,
+    @Req() request: AuthenticatedRequest,
     @Body() body: CreateAnalysisDto,
     @UploadedFile() file: Express.Multer.File | undefined,
-    @Headers('idempotency-key') idempotencyKey?: string,
-    @Headers('content-type') contentType?: string,
   ) {
+    const idempotencyKey = request.get('idempotency-key');
+    const contentType = request.get('content-type');
     if (body.type === 'TEXT') {
+      if (body.sourceType === 'SCREEN_CROP') {
+        if (
+          !file ||
+          body.text !== undefined ||
+          !/^multipart\/form-data(?:\s*;|$)/i.test(contentType ?? '')
+        )
+          throw new ApiError(
+            400,
+            'COMMON400',
+            'SCREEN_CROP은 multipart/form-data의 type=TEXT, sourceType=SCREEN_CROP, file이 필요하며 text를 함께 전달할 수 없습니다.',
+          );
+        return this.service.createCapture(
+          request.user.id,
+          file,
+          idempotencyKey,
+        );
+      }
+      // #13/#15 JSON requests without sourceType retain DIRECT semantics.
       if (file || !/^application\/json(?:\s*;|$)/i.test(contentType ?? ''))
         throw new ApiError(
           400,
           'COMMON400',
-          'TEXT는 application/json으로 요청해야 합니다.',
+          'DIRECT 또는 sourceType 생략 TEXT는 application/json의 text만 전달해 주세요.',
         );
-      if (idempotencyKey !== undefined)
-        throw new ApiError(
-          400,
-          'COMMON400',
-          'TEXT 요청은 Idempotency-Key를 지원하지 않습니다.',
-        );
-      return this.service.createText('development-user', body.text);
+      return this.service.createText(
+        request.user.id,
+        body.text,
+        idempotencyKey,
+      );
     }
-    // return this.service.create(request.user.id, file);
-    return this.service.create('development-user', file, idempotencyKey);
+    if (body.sourceType !== undefined || body.text !== undefined)
+      throw new ApiError(
+        400,
+        'COMMON400',
+        'IMAGE에는 sourceType과 text를 전달할 수 없습니다.',
+      );
+    return this.service.create(request.user.id, file, idempotencyKey);
   }
 }

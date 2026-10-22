@@ -1,3 +1,4 @@
+import { configureAnalysisSwagger } from '../src/domains/analysis/analysis.swagger';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -24,6 +25,7 @@ describe('TEXT analysis JSON API with real Service/Repository and mocked Prisma 
       .overrideProvider(ConfigService)
       .useValue(
         new ConfigService({
+          NODE_ENV: 'development',
           ANALYSIS_MAX_FILE_BYTES: '100000',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '100',
@@ -209,24 +211,17 @@ describe('TEXT analysis JSON API with real Service/Repository and mocked Prisma 
     });
   });
   it('documents both input formats and TEXT constraints', () => {
-    const doc = SwaggerModule.createDocument(
-      app,
-      new DocumentBuilder().build(),
+    const doc = configureAnalysisSwagger(
+      SwaggerModule.createDocument(app, new DocumentBuilder().build()),
     );
     const body = doc.paths['/api/analysis'].post!.requestBody as any;
     expect(Object.keys(body.content).sort()).toEqual([
       'application/json',
       'multipart/form-data',
     ]);
-    expect(body.content['application/json'].schema.oneOf).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          required: ['type', 'text'],
-          properties: expect.objectContaining({
-            text: expect.objectContaining({ minLength: 5, maxLength: 3000 }),
-          }),
-        }),
-      ]),
-    );
+    expect(body.content['application/json'].schema).toMatchObject({
+      required: ['type', 'text'],
+      properties: { text: { minLength: 5, maxLength: 3000 } },
+    });
   });
 });

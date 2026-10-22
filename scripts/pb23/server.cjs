@@ -47,6 +47,7 @@ repository.claim = async (...args) => {
       {
         provide: ConfigService,
         useValue: new ConfigService({
+          NODE_ENV: 'development',
           ANALYSIS_MAX_FILE_BYTES: '100000',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '5000',

@@ -1,3 +1,4 @@
+import { configureAnalysisSwagger } from './domains/analysis/analysis.swagger';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -17,7 +18,7 @@ async function bootstrap() {
   SwaggerModule.setup(
     'api/docs',
     app,
-    SwaggerModule.createDocument(app, swaggerConfig),
+    configureAnalysisSwagger(SwaggerModule.createDocument(app, swaggerConfig)),
   );
 
   await app.listen(process.env.PORT ?? 3000);

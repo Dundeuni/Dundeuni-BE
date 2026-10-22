@@ -13,7 +13,7 @@ AI 생성·변조 가능성과 사기 위험은 하나의 점수로 합치지 �
 P0 `AnalysisType`은 IMAGE/TEXT/URL이다. IMAGE는 multipart, TEXT는 JSON을 지원하며 URL은 400으로 거부한다.
 TEXT 요청·응답은 문서 하단 Issue #13 절을 따른다.
 JPEG(`image/jpeg`, `.jpg`/`.jpeg`)와 PNG(`image/png`, `.png`)만 허용한다.
-MIME, 확장자, 파일 시그니처 및 크기를 확인한다. 전체 이미지 디코딩 검증은 실제 Provider 연결 시 필요하다.
+MIME, 확장자, 파일 시그니처 및 크기를 확인한다. sharp 전체 이미지 디코딩 검증도 저장·Provider 호출 전에 수행한다.
 `ANALYSIS_MAX_FILE_BYTES`로 상한을 설정한다. `.env.example`의 10 MiB는 개발 제안값이며 운영 정책 확정이 필요하다.
 
 ```bash
@@ -669,3 +669,29 @@ TextAnalysisInput은 `{ analysisId, userId, text }`, TextAnalysisProvider는
 현재 정책에서는 비동기 Worker가 DB에서 원문을 읽을 수 없다. #96이 실제 비동기 처리를 필요로 하면
 원문 보관 동의/암호화/보관 기간/삭제 정책이나 별도의 단기 전달 방식을 먼저 결정해야 한다.
 이력 미리보기를 AI 입력 원문으로 대체하면 안 된다.
+
+
+테스트 통합 브랜치는 #10의 dev 이미지 입력 검증도 반영한다. 스키마 호환성은 analysis-schema-audit.md를 참조한다.
+
+## 테스트 브랜치 #96 TEXT AI opt-in
+
+기본 TEXT_AI_PROVIDER=disabled에서는 기존 #13의 QUEUED/202와 입력 정책이 유지된다.
+TEXT_AI_PROVIDER=http일 때만 AI_SERVICE_BASE_URL의 배포 text-risk-1.0 API를 호출한다.
+TEXT_AI_SERVICE_TOKEN은 선택적인 별도 Bearer 토큰이며 미설정 시 AI_SERVICE_TOKEN을 사용한다.
+IMAGE의 AI_SERVER_BASE_URL/기존 CuRe·TruFor 계약은 변경하지 않는다.
+
+HTTP 모드의 TEXT 요청도 기존 POST application/json 및 HTTP 202를 유지한다.
+성공 응답의 result.textResult는 native riskScore(0..1/null), scoreScale, scoreMeaning,
+decision, IDs, 버전, quality, processingMs 메타데이터다.
+phishingScore/riskLevel을 만들어 채우거나 IMAGE 점수 컬럼을 사용하지 않는다.
+서버의 text echo/OCR 및 자유문구 evidence/limitations는 DB·공개 재응답에서 제외한다.
+근거의 공개·영구 저장은 마스킹 정책 합의가 남아 있다.
+
+HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사용, 처리 중/충돌/만료 409,
+실패는 기존 BE 오류를 재사용하며 자동 재시도는 없다.
+실제 서버 건강/계약 접속은 성공했지만 첫 분석 요청이 401이어서 성공 E2E는 아직 미검증이다.
+상세 차이·테스트 구분·실행 방법은 AI-TEXT-INTEGRATION-E2E.md를 따른다.
+
+## Issue #15 최신 POST 계약
+
+[POST TEXT/OCR 계약](../API-POST-TEXT-OCR.md)을 참고하세요. 과거 기록의 OCR 공개 경로 미연결 설명은 당시 시점 기준이며 현재는 명시적 sourceType 계약으로 연결합니다.
