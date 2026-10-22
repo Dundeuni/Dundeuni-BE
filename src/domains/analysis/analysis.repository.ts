@@ -242,6 +242,13 @@ export class AnalysisRepository {
     return saved[saved.length - 1] as Analysis;
   }
 
+  findActiveWithModelResults(id: string, userId: string, now = new Date()) {
+    return this.prisma.analysis.findFirst({
+      where: { id, userId, expiresAt: { gt: now } },
+      include: { modelResults: true },
+    });
+  }
+
   findWithModelResults(id: string) {
     return this.prisma.analysis.findUnique({
       where: { id },

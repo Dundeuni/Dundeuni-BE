@@ -78,3 +78,5 @@ P0은 회원가입·로그인, 사용자 프로필, 이미지·텍스트·URL �
 직접 입력은 application/json의 `{"type":"TEXT","sourceType":"DIRECT","text":"분석할 메시지"}`로 요청합니다. 기존 JSON의 sourceType 생략은 DIRECT로 유지합니다. 문자 캡처는 multipart/form-data의 `type=TEXT`, `sourceType=SCREEN_CROP`, `file`로 전송하세요. 일반 이미지 생성·변조 분석은 sourceType 없이 `type=IMAGE`, `file`로 요청합니다.
 
 `NODE_ENV=development`에서만 공통 RequestUserGuard가 development-user를 사용합니다. production 및 기타 환경에서는 POST에 JWT Bearer가 필요하며 sub로 저장합니다. 로그인·토큰 발급 기능은 제공하지 않습니다. 자세한 계약은 [POST TEXT/OCR](docs/API-POST-TEXT-OCR.md)을 참고하세요.
+
+#17의 상세 GET 신규 구현과 응답 계약은 [분석 결과 정규화](docs/ANALYSIS-RESPONSE-NORMALIZATION.md)를 참고하세요.

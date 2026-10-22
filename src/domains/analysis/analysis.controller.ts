@@ -1,8 +1,9 @@
 import { analysisRequestBody } from './analysis.swagger';
 import { RequestUserGuard } from '../../common/auth/request-user.guard';
-import { Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth } from '@nestjs/swagger';
+import { Get, Param, ParseUUIDPipe, Req, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, getSchemaPath } from '@nestjs/swagger';
 import { AuthenticatedRequest } from '../../common/auth/access-token.guard';
+import { NormalizedAnalysisResultDto } from './analysis-result.mapper';
 import {
   Body,
   Controller,
@@ -40,7 +41,7 @@ function errorSchema(code: string) {
   };
 }
 
-@ApiExtraModels(ImageModelsPublicResultDto)
+@ApiExtraModels(ImageModelsPublicResultDto, NormalizedAnalysisResultDto)
 @ApiTags('Analysis')
 @ApiBearerAuth()
 @Controller('analysis')
@@ -48,6 +49,138 @@ function errorSchema(code: string) {
 @UseFilters(ApiErrorFilter)
 export class AnalysisController {
   constructor(private readonly service: AnalysisService) {}
+
+  @Get(':analysisId')
+  @ApiOperation({
+    summary: '분석 결과 조회',
+    description:
+      'NODE_ENV=development에서만 Bearer 없이 development-user로 조회(토큰 전달 시에도 동일). production 및 그 외 환경은 JWT Bearer 필수, JWT sub로 소유권 검사. 본인 소유의 만료 전 기록만 조회. ANALYZING은 처리 중. AI/Gemini 호출 없음.',
+  })
+  @ApiResponse({
+    status: 200,
+    schema: {
+      type: 'object',
+      properties: {
+        isSuccess: { type: 'boolean' },
+        code: { type: 'string', example: 'ANALYSIS200' },
+        message: { type: 'string' },
+        result: {
+          type: 'object',
+          properties: {
+            analysisId: { type: 'string', format: 'uuid' },
+            type: { type: 'string', enum: ['IMAGE', 'TEXT', 'URL'] },
+            sourceType: {
+              type: 'string',
+              nullable: true,
+              enum: ['IMAGE', 'TEXT', 'SCREEN_CROP'],
+            },
+            status: {
+              type: 'string',
+              enum: ['QUEUED', 'ANALYZING', 'COMPLETED', 'FAILED'],
+            },
+            aiGenerationScore: {
+              type: 'number',
+              nullable: true,
+              minimum: 0,
+              maximum: 100,
+              description: '레거시 CuRe 표시 점수. 피싱 위험 점수 아님.',
+            },
+            aiRiskLevel: {
+              type: 'string',
+              nullable: true,
+              description: '레거시 모델 값. 공통 riskLevel과 별개.',
+            },
+            reasons: {
+              type: 'array',
+              nullable: true,
+              items: {
+                type: 'object',
+                properties: { description: { type: 'string' } },
+              },
+              description: '레거시 IMAGE 근거',
+            },
+            modelVersion: { type: 'string', nullable: true },
+            errorCode: { type: 'string', nullable: true },
+            imageResultStatus: {
+              type: 'string',
+              nullable: true,
+              enum: ['COMPLETED', 'PARTIAL_FAILED', 'FAILED'],
+            },
+            modelResults: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  kind: {
+                    type: 'string',
+                    enum: ['GENERATION', 'MANIPULATION'],
+                  },
+                  status: { type: 'string', enum: ['SUCCEEDED', 'FAILED'] },
+                  displayScore: {
+                    type: 'integer',
+                    nullable: true,
+                    minimum: 0,
+                    maximum: 100,
+                  },
+                  decision: {
+                    type: 'string',
+                    nullable: true,
+                    enum: [
+                      'AI_GENERATED_SUSPECTED',
+                      'NO_CLEAR_GENERATION_SIGNAL',
+                      'MANIPULATION_SUSPECTED',
+                      'NO_CLEAR_MANIPULATION_SIGNAL',
+                      'INCONCLUSIVE',
+                    ],
+                  },
+                  reasons: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: { description: { type: 'string' } },
+                    },
+                  },
+                  limitations: { type: 'array', items: { type: 'string' } },
+                  modelName: { type: 'string' },
+                  modelVersion: { type: 'string' },
+                  policyVersion: { type: 'string' },
+                  errorCode: { type: 'string', nullable: true },
+                  retryable: { type: 'boolean', nullable: true },
+                },
+              },
+            },
+            result: { $ref: getSchemaPath(NormalizedAnalysisResultDto) },
+            createdAt: { type: 'string', format: 'date-time' },
+            completedAt: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+            },
+            updatedAt: { type: 'string', format: 'date-time' },
+            expiresAt: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    schema: errorSchema('COMMON400'),
+    description: '잘못된 UUID',
+  })
+  @ApiResponse({ status: 401, schema: errorSchema('AUTH401') })
+  @ApiResponse({
+    status: 404,
+    schema: errorSchema('ANALYSIS404'),
+    description: '미존재/다른 사용자/만료',
+  })
+  @ApiResponse({ status: 500, schema: errorSchema('COMMON500') })
+  findOne(
+    @Req() request: AuthenticatedRequest,
+    @Param('analysisId', new ParseUUIDPipe()) analysisId: string,
+  ) {
+    return this.service.findOne(request.user.id, analysisId);
+  }
 
   @Post()
   @HttpCode(202)

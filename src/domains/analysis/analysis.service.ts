@@ -1,3 +1,4 @@
+import { mapAnalysisResult } from './analysis-result.mapper';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Analysis } from '@prisma/client';
@@ -21,6 +22,26 @@ export class AnalysisService {
     private readonly config: ConfigService,
     @Optional() private readonly textAi?: TextAiWorkflowService,
   ) {}
+
+  async findOne(userId: string, analysisId: string) {
+    try {
+      const row = await this.repository.findActiveWithModelResults(
+        analysisId,
+        userId,
+      );
+      if (!row)
+        throw new ApiError(404, 'ANALYSIS404', '분석 결과를 찾을 수 없습니다.');
+      return {
+        isSuccess: true,
+        code: 'ANALYSIS200',
+        message: '분석 결과 조회에 성공했습니다.',
+        result: mapAnalysisResult(row),
+      };
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(500, 'COMMON500', '분석 결과 조회에 실패했습니다.');
+    }
+  }
 
   async createText(userId: string, input: unknown, key?: string) {
     const text = normalizeTextInput(input);

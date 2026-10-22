@@ -695,3 +695,7 @@ HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사�
 ## Issue #15 최신 POST 계약
 
 [POST TEXT/OCR 계약](../API-POST-TEXT-OCR.md)을 참고하세요. 과거 기록의 OCR 공개 경로 미연결 설명은 당시 시점 기준이며 현재는 명시적 sourceType 계약으로 연결합니다.
+
+## Issue #17 상세 GET 신규 구현
+
+[GET 분석 결과 정규화](../ANALYSIS-RESPONSE-NORMALIZATION.md)를 참고하세요.
