@@ -48,6 +48,7 @@ liveDescribe(
       )
         throw Error('Live test database guard');
       const config = new ConfigService({
+        NODE_ENV: 'development',
         TEXT_AI_PROVIDER: 'http',
         AI_SERVICE_BASE_URL: base,
         AI_SERVICE_TOKEN: token,

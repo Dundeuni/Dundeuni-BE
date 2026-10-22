@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -21,6 +22,7 @@ dbDescribe(
     const image = { analyze: jest.fn() };
     const usage = { reserveAiUsage: jest.fn(), releaseAiUsage: jest.fn() };
     const config = new ConfigService({
+      NODE_ENV: 'development',
       TEXT_AI_PROVIDER: 'http',
       AI_SERVICE_BASE_URL: 'http://127.0.0.1:9',
       AI_SERVICE_TOKEN: 'test-only-token',
@@ -74,6 +76,72 @@ dbDescribe(
     afterAll(async () => {
       await app?.close();
       await prisma?.$disconnect();
+    });
+    it('persists explicit SCREEN_CROP via public POST with real PostgreSQL', async () => {
+      const bytes = await sharp({
+        create: { width: 4, height: 4, channels: 3, background: 'white' },
+      })
+        .png()
+        .toBuffer();
+      transport.mockImplementationOnce(async (_url, init) => {
+        const form = init!.body as FormData;
+        expect(form.get('sourceType')).toBe('SCREEN_CROP');
+        return Response.json(
+          textWire(
+            String(form.get('analysisId')),
+            String(form.get('elementId')),
+            'SCREEN_CROP',
+          ),
+        );
+      });
+      const response = await request(app.getHttpServer())
+        .post('/api/analysis')
+        .field('type', 'TEXT')
+        .field('sourceType', 'SCREEN_CROP')
+        .attach('file', bytes, 'capture.png')
+        .expect(202);
+      const row = await prisma.analysis.findUniqueOrThrow({
+        where: { id: response.body.result.analysisId },
+        include: { modelResults: true },
+      });
+      expect(row).toMatchObject({
+        type: 'TEXT',
+        status: 'COMPLETED',
+        textPreview: '',
+        textResult: { sourceType: 'SCREEN_CROP', riskScore: 0.82 },
+      });
+      expect(row.modelResults).toEqual([]);
+      expect(JSON.stringify(row)).not.toContain('private original');
+      expect(image.analyze).not.toHaveBeenCalled();
+    });
+    it('preserves failed SCREEN_CROP source in real PostgreSQL', async () => {
+      const bytes = await sharp({
+        create: { width: 4, height: 4, channels: 3, background: 'white' },
+      })
+        .png()
+        .toBuffer();
+      const key = randomUUID();
+      transport.mockResolvedValueOnce(new Response('', { status: 503 }));
+      await request(app.getHttpServer())
+        .post('/api/analysis')
+        .set('Idempotency-Key', key)
+        .field('type', 'TEXT')
+        .field('sourceType', 'SCREEN_CROP')
+        .attach('file', bytes, 'capture.png')
+        .expect(503);
+      const row = await prisma.analysis.findUniqueOrThrow({
+        where: {
+          userId_idempotencyKey: {
+            userId: 'development-user',
+            idempotencyKey: key,
+          },
+        },
+      });
+      expect(row).toMatchObject({
+        type: 'TEXT',
+        status: 'FAILED',
+        textResult: { sourceType: 'SCREEN_CROP' },
+      });
     });
     it('persists native score/meaning/quality separately from IMAGE, without raw text or free-form fields', async () => {
       const response = await post(

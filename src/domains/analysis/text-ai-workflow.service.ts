@@ -23,18 +23,40 @@ export class TextAiWorkflowService {
     private readonly config: ConfigService,
   ) {}
 
-  async create(userId: string, text: string, key?: string) {
+  create(userId: string, text: string, key?: string) {
+    return this.execute(userId, { text }, key);
+  }
+
+  createCapture(userId: string, file: Express.Multer.File, key?: string) {
+    if (!this.provider.analyzeImage) throw new TextAnalysisError('UPSTREAM');
+    return this.execute(userId, { file }, key);
+  }
+
+  private async execute(
+    userId: string,
+    input: { text: string } | { file: Express.Multer.File },
+    key?: string,
+  ) {
     if (key !== undefined && !/^[\x21-\x7e]{1,128}$/.test(key))
       throw new ApiError(
         400,
         'COMMON400',
         '올바른 Idempotency-Key가 필요합니다.',
       );
-    const hash = createHash('sha256')
-      .update('TEXT\0')
-      .update(text)
-      .digest('hex');
-    const textPreview = Array.from(text).slice(0, 200).join('');
+    const hash =
+      'text' in input
+        ? createHash('sha256').update('TEXT\0').update(input.text).digest('hex')
+        : createHash('sha256')
+            .update('SCREEN_CROP\0')
+            .update(input.file.mimetype)
+            .update('\0')
+            .update(input.file.buffer)
+            .digest('hex');
+    // OCR text and screenshot bytes are never persisted, including previews.
+    const textPreview =
+      'text' in input ? Array.from(input.text).slice(0, 200).join('') : '';
+    const sourceType =
+      'text' in input ? ('TEXT' as const) : ('SCREEN_CROP' as const);
     const createdAt = new Date();
     let analysis: Analysis;
     try {
@@ -45,6 +67,9 @@ export class TextAiWorkflowService {
                 userId,
                 hash,
                 textPreview,
+                ...(sourceType === 'SCREEN_CROP'
+                  ? ['SCREEN_CROP' as const]
+                  : []),
               ),
               claimed: true,
             }
@@ -53,7 +78,11 @@ export class TextAiWorkflowService {
               hash,
               new Date(createdAt.getTime() + TEXT_RETENTION_MS),
               key,
-              { textPreview, createdAt },
+              {
+                textPreview,
+                createdAt,
+                ...(sourceType === 'SCREEN_CROP' ? { sourceType } : {}),
+              },
             );
       analysis = claim.analysis;
       if (!claim.claimed) {
@@ -114,10 +143,16 @@ export class TextAiWorkflowService {
       const elementId = randomUUID();
       const deadline = Date.now() + timeout;
       const value = await Promise.race([
-        this.provider.analyze(
-          { analysisId: analysis.id, elementId, userId, text },
-          abort.signal,
-        ),
+        'text' in input
+          ? this.provider.analyze(
+              { analysisId: analysis.id, elementId, userId, text: input.text },
+              abort.signal,
+            )
+          : this.provider.analyzeImage!(
+              input.file,
+              { analysisId: analysis.id, elementId, sourceType: 'SCREEN_CROP' },
+              abort.signal,
+            ),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             abort.abort();
@@ -130,7 +165,7 @@ export class TextAiWorkflowService {
       const result = validateTextRiskResponse(value, {
         analysisId: analysis.id,
         elementId,
-        sourceType: 'TEXT',
+        sourceType,
       });
       const saved = await this.repository.completeText(
         analysis.id,

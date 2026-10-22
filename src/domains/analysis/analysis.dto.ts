@@ -7,7 +7,8 @@ import { normalizeTextInput } from './text-analysis.input';
 export class CreateAnalysisDto {
   @ApiProperty({
     enum: ['IMAGE', 'TEXT'],
-    description: 'IMAGE는 multipart/form-data, TEXT는 application/json.',
+    description:
+      'IMAGE는 생성·변조 분석 파일. TEXT는 JSON 문자열 또는 multipart 문자 캡처 파일.',
     example: 'IMAGE',
   })
   @IsIn([AnalysisType.IMAGE, AnalysisType.TEXT], {
@@ -16,13 +17,28 @@ export class CreateAnalysisDto {
   type!: AnalysisType;
 
   @ApiProperty({
+    enum: ['DIRECT', 'SCREEN_CROP'],
+    required: false,
+    description:
+      'TEXT 전용. JSON은 DIRECT 또는 생략(기존 요청 호환). 캡처 multipart는 SCREEN_CROP 필수. IMAGE에는 전달하지 않음.',
+  })
+  @ValidateIf((body: CreateAnalysisDto) => body.sourceType !== undefined)
+  @IsIn(['DIRECT', 'SCREEN_CROP'], {
+    message: 'sourceType은 DIRECT 또는 SCREEN_CROP이어야 합니다.',
+  })
+  sourceType?: 'DIRECT' | 'SCREEN_CROP';
+
+  @ApiProperty({
     required: false,
     minLength: 5,
     maxLength: 3000,
     description:
-      'TEXT 필수. 앞뒤 공백 제거 후 Unicode 코드 포인트 기준 5~3,000자. 원문 미보관.',
+      'TEXT JSON 입력 필수(캡처 파일 입력에는 제외). 앞뒤 공백 제거 후 Unicode 코드 포인트 기준 5~3,000자. 원문 미보관.',
   })
-  @ValidateIf((body: CreateAnalysisDto) => body.type === AnalysisType.TEXT)
+  @ValidateIf(
+    (body: CreateAnalysisDto) =>
+      body.type === AnalysisType.TEXT && body.text !== undefined,
+  )
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim() : value,
   )

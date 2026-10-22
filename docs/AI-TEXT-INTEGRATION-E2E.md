@@ -226,3 +226,7 @@ AI_SERVER_BASE_URL은 기존 IMAGE 전용이고 AI_SERVICE_BASE_URL은 새 TEXT 
 8. AI 10초 초안과 실제 실행 시간/현재 BE 예산 차이, 운영 성능·과금 정책. 이번 검증 타임아웃은 운영 정책 확정이 아님.
 9. 기존 #13의 DB 비호환 문자 처리·Swagger media schema 혼재는 별도 후속 사항.
 10. 토큰 갱신 후 live matrix가 실제 서버 응답을 수용하는지 최종 검증해야 #96을 PASS로 판정할 수 있음.
+
+## Issue #15 공개 OCR 연결 보완
+
+[최신 POST 계약](API-POST-TEXT-OCR.md)의 type=TEXT/sourceType=SCREEN_CROP/file을 지원합니다. 위 과거 인증 실패 및 검증 기록은 당시 결과입니다. 실제 AI의 현재 접속 성공을 의미하지 않습니다.

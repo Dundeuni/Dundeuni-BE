@@ -18,13 +18,21 @@ import { StoredTextRiskResult } from './text-risk.dto';
 @Injectable()
 export class AnalysisRepository {
   constructor(private readonly prisma: PrismaService) {}
-  createText(userId: string, requestHash: string, textPreview: string) {
+  createText(
+    userId: string,
+    requestHash: string,
+    textPreview: string,
+    sourceType?: 'SCREEN_CROP',
+  ) {
     const createdAt = new Date();
     return this.prisma.analysis.create({
       data: {
         userId,
         requestHash,
         textPreview,
+        ...(sourceType === 'SCREEN_CROP'
+          ? { textResult: { sourceType: 'SCREEN_CROP' } }
+          : {}),
         type: AnalysisType.TEXT,
         status: 'QUEUED',
         createdAt,
@@ -65,7 +73,7 @@ export class AnalysisRepository {
     requestHash: string,
     expiresAt: Date,
     idempotencyKey: string,
-    text?: { textPreview: string; createdAt: Date },
+    text?: { textPreview: string; createdAt: Date; sourceType?: 'SCREEN_CROP' },
   ) {
     try {
       const analysis = await this.prisma.analysis.create({
@@ -78,6 +86,9 @@ export class AnalysisRepository {
           ...(text
             ? {
                 textPreview: text.textPreview,
+                ...(text.sourceType === 'SCREEN_CROP'
+                  ? { textResult: { sourceType: 'SCREEN_CROP' } }
+                  : {}),
                 createdAt: text.createdAt,
                 updatedAt: text.createdAt,
               }

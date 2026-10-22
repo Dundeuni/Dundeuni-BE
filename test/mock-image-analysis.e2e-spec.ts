@@ -92,7 +92,13 @@ describe('Mock AI Provider', () => {
   });
   it('requires explicit URL and token for the real transport', () => {
     expect(() =>
-      selectImageAnalysisProvider(new ConfigService({ AI_PROVIDER: 'http' })),
+      selectImageAnalysisProvider(
+        new ConfigService({
+          AI_PROVIDER: 'http',
+          AI_SERVER_BASE_URL: '',
+          AI_SERVICE_TOKEN: '',
+        }),
+      ),
     ).toThrow('AI_SERVER_BASE_URL and AI_SERVICE_TOKEN');
   });
   it.each(['2147483648', '9007199254740991'])(

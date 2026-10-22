@@ -92,6 +92,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       .overrideProvider(ConfigService)
       .useValue(
         new ConfigService({
+          NODE_ENV: 'development',
           ANALYSIS_MAX_FILE_BYTES: '1024',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '100',
@@ -245,6 +246,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     'TIMEOUT',
   ] as const)('runs real service→Mock→Prisma flow for %s', async (scenario) => {
     const config = new ConfigService({
+      NODE_ENV: 'development',
       ANALYSIS_MAX_FILE_BYTES: '128',
       ANALYSIS_RETENTION_SECONDS: '86400',
       AI_REQUEST_TIMEOUT_MS: '30',

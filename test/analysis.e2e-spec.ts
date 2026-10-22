@@ -1,3 +1,4 @@
+import { configureAnalysisSwagger } from '../src/domains/analysis/analysis.swagger';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -121,6 +122,7 @@ describe('IMAGE analysis API', () => {
           ({
             JWT_ACCESS_SECRET: secret,
             AI_REQUEST_TIMEOUT_MS: '100',
+            NODE_ENV: 'development',
             ANALYSIS_MAX_FILE_BYTES: '1024',
             ANALYSIS_RETENTION_SECONDS: '86400',
           })[key],
@@ -592,27 +594,28 @@ describe('IMAGE analysis API', () => {
       .get('/api/health')
       .expect(200, { status: 'ok' });
   });
-  it('documents unauthenticated multipart requests and all responses', () => {
-    const doc = SwaggerModule.createDocument(
-      app,
-      new DocumentBuilder().addBearerAuth().build(),
+  it('documents bearer policy and multipart requests with all responses', () => {
+    const doc = configureAnalysisSwagger(
+      SwaggerModule.createDocument(
+        app,
+        new DocumentBuilder().addBearerAuth().build(),
+      ),
     );
     const operation = doc.paths['/api/analysis'].post!;
-    expect(operation.security ?? []).toEqual([]);
+    expect(operation.security).toEqual([{ bearer: [] }]);
     expect(operation.requestBody).toMatchObject({
       content: {
         'multipart/form-data': {
           schema: {
-            oneOf: expect.arrayContaining([
-              expect.objectContaining({ required: ['type', 'file'] }),
-            ]),
+            type: 'object',
+            required: ['type', 'file'],
+            properties: { file: { type: 'string', format: 'binary' } },
           },
         },
         'application/json': {
           schema: {
-            oneOf: expect.arrayContaining([
-              expect.objectContaining({ required: ['type', 'text'] }),
-            ]),
+            type: 'object',
+            required: ['type', 'text'],
           },
         },
       },
@@ -621,6 +624,24 @@ describe('IMAGE analysis API', () => {
       expect.arrayContaining([
         expect.objectContaining({ name: 'Idempotency-Key' }),
       ]),
+    );
+    expect(operation.parameters).toEqual([
+      expect.objectContaining({
+        name: 'Idempotency-Key',
+        in: 'header',
+        required: false,
+      }),
+    ]);
+    const body =
+      operation.requestBody as import('@nestjs/swagger').RequestBodyObject;
+    expect(body.content['multipart/form-data'].schema).not.toHaveProperty(
+      'oneOf',
+    );
+    expect(body.content['multipart/form-data'].schema).not.toHaveProperty(
+      'properties.text',
+    );
+    expect(body.content['application/json'].schema).not.toHaveProperty(
+      'properties.file',
     );
     expect(Object.keys(operation.responses)).toEqual(
       expect.arrayContaining(['202', '400', '413', '429', '415', '503', '500']),

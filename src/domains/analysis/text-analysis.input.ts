@@ -13,6 +13,15 @@ export interface TextAnalysisInput {
 /** #96 can implement this port; #13 does not register or call an AI provider. */
 export interface TextAnalysisProvider {
   analyze(input: TextAnalysisInput, signal: AbortSignal): Promise<unknown>;
+  analyzeImage?(
+    file: Express.Multer.File,
+    context: {
+      analysisId: string;
+      elementId: string;
+      sourceType: 'IMAGE' | 'SCREEN_CROP';
+    },
+    signal: AbortSignal,
+  ): Promise<unknown>;
 }
 
 export function normalizeTextInput(value: unknown): string {

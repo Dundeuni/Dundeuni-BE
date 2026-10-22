@@ -691,3 +691,7 @@ HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사�
 실패는 기존 BE 오류를 재사용하며 자동 재시도는 없다.
 실제 서버 건강/계약 접속은 성공했지만 첫 분석 요청이 401이어서 성공 E2E는 아직 미검증이다.
 상세 차이·테스트 구분·실행 방법은 AI-TEXT-INTEGRATION-E2E.md를 따른다.
+
+## Issue #15 최신 POST 계약
+
+[POST TEXT/OCR 계약](../API-POST-TEXT-OCR.md)을 참고하세요. 과거 기록의 OCR 공개 경로 미연결 설명은 당시 시점 기준이며 현재는 명시적 sourceType 계약으로 연결합니다.
