@@ -5,6 +5,7 @@ export const TEXT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** #96 integration input, request memory only. Never enqueue, persist or log text. */
 export interface TextAnalysisInput {
   analysisId: string;
+  elementId?: string;
   userId: string;
   text: string;
 }

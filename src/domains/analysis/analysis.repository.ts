@@ -13,6 +13,7 @@ import {
 } from './image-analysis-v1.dto';
 import { ImageAnalysisResult } from './image-analysis.service';
 import { TEXT_RETENTION_MS } from './text-analysis.input';
+import { StoredTextRiskResult } from './text-risk.dto';
 
 @Injectable()
 export class AnalysisRepository {
@@ -64,6 +65,7 @@ export class AnalysisRepository {
     requestHash: string,
     expiresAt: Date,
     idempotencyKey: string,
+    text?: { textPreview: string; createdAt: Date },
   ) {
     try {
       const analysis = await this.prisma.analysis.create({
@@ -72,7 +74,14 @@ export class AnalysisRepository {
           requestHash,
           expiresAt,
           idempotencyKey,
-          type: AnalysisType.IMAGE,
+          type: text ? AnalysisType.TEXT : AnalysisType.IMAGE,
+          ...(text
+            ? {
+                textPreview: text.textPreview,
+                createdAt: text.createdAt,
+                updatedAt: text.createdAt,
+              }
+            : {}),
         },
       });
       return { analysis, claimed: true };
@@ -89,6 +98,18 @@ export class AnalysisRepository {
       return { analysis, claimed: false };
     }
   }
+  completeText(id: string, result: StoredTextRiskResult) {
+    return this.prisma.analysis.update({
+      where: { id, type: AnalysisType.TEXT, status: 'ANALYZING' },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+        errorCode: null,
+        textResult: result as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
   analyzing(id: string) {
     return this.prisma.analysis.update({
       where: { id },

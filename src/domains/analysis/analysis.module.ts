@@ -1,6 +1,11 @@
 import { UploadedImageCleanupInterceptor } from './uploaded-image-cleanup.interceptor';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { TextAiWorkflowService } from './text-ai-workflow.service';
+import {
+  TEXT_ANALYSIS_PROVIDER,
+  selectTextAnalysisProvider,
+} from './http-text-analysis.provider';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { AccessTokenGuard } from '../../common/auth/access-token.guard';
@@ -36,6 +41,12 @@ import {
     PrismaService,
     AccessTokenGuard,
     AnalysisService,
+    TextAiWorkflowService,
+    {
+      provide: TEXT_ANALYSIS_PROVIDER,
+      inject: [ConfigService],
+      useFactory: selectTextAnalysisProvider,
+    },
     AnalysisRepository,
     AnalysisUsageService,
     ImageAnalysisService,
