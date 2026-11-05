@@ -11,6 +11,7 @@ enum AnalysisType {
   IMAGE
   TEXT
   URL
+  PHONE
 }
 
 enum AnalysisStatus {
@@ -66,6 +67,7 @@ model Analysis {
   expiresAt         DateTime
 
   imageResultStatus ImageResultStatus?
+  phoneResult       PhoneAnalysisResult?
   modelResults      AnalysisModelResult[]
   summary           String?
   summaryStatus     AnalysisSummaryStatus?
@@ -93,4 +95,24 @@ model AnalysisModelResult {
 
   @@unique([analysisId, kind])
   @@map("analysis_model_results")
+}
+
+model PhoneAnalysisResult {
+  analysisId String @id @db.Uuid
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  phoneNumber String
+  provider String @default("APICK")
+  riskLevel String?
+  spamType String?
+  reportCount Int?
+  reportCountRaw String?
+  cyberCrime String?
+  reasons Json?
+  rawData Json?
+  normalizedData Json?
+  policyVersion String?
+  analyzedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@map("phone_analysis_results")
 }
