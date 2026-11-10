@@ -1,3 +1,4 @@
+import { calculateOverallResult } from '../src/domains/analysis/image-analysis-policy';
 import { ConfigService } from '@nestjs/config';
 import { ApiError } from '../src/common/http/api-error';
 import { createServer } from 'node:http';
@@ -183,6 +184,69 @@ describe('v0.2 real HTTP transport with mocked HTTP', () => {
       );
     }
   });
+  it.each([false, true])(
+    'applies PROBE and FUSED boundaries (at threshold: %s)',
+    async (atThreshold) => {
+      const file = makeFile();
+      const ctx = context(file);
+      const wire = await new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(
+        file,
+        ctx,
+      );
+      const generationDecision = atThreshold
+        ? 'AI_GENERATED_SUSPECTED'
+        : 'NO_CLEAR_GENERATION_SIGNAL';
+      const manipulationDecision = atThreshold
+        ? 'MANIPULATION_SUSPECTED'
+        : 'NO_CLEAR_MANIPULATION_SIGNAL';
+      Object.assign(wire.generation!, {
+        modelName: 'CuRe',
+        modelVersion: 'CuRe-probe-pe-core-l14-336-test',
+        rawScore: { score: atThreshold ? 0.5 : 0.499999 },
+        displayScore: 50,
+        decision: generationDecision,
+      });
+      Object.assign(wire.manipulation!, {
+        modelName: 'FUSED',
+        modelVersion: 'FUSED-20-80-test',
+        rawScore: { score: atThreshold ? 0.19978919508866966 : 0.199789 },
+        displayScore: 20,
+        decision: manipulationDecision,
+      });
+      wire.overallResult = calculateOverallResult(
+        wire.generation,
+        wire.manipulation,
+      );
+      jest.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(wire));
+      const result = await new ImageAnalysisService(
+        new HttpImageAnalysisProvider(settings()),
+        settings(),
+      ).analyze(file, ctx);
+      if (!('format' in result)) throw new Error('Expected model projection');
+      expect(result.models.generation?.decision).toBe(generationDecision);
+      expect(result.models.generation?.modelVersion).toBe(
+        'CuRe-probe-pe-core-l14-336-test',
+      );
+      expect(result.models.manipulation).toMatchObject({
+        modelName: 'FUSED',
+        modelVersion: 'FUSED-20-80-test',
+        decision: manipulationDecision,
+      });
+    },
+  );
+  it.each(['TruFor-test', 'FUSED-80-20-test'])(
+    'rejects a FUSED result with incompatible version %s',
+    async (modelVersion) => {
+      const file = makeFile();
+      const ctx = context(file);
+      const wire = await new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(
+        file,
+        ctx,
+      );
+      Object.assign(wire.manipulation!, { modelName: 'FUSED', modelVersion });
+      expect(() => validateAiImageResponseV02(wire)).toThrow();
+    },
+  );
   it.each([
     ['GENERATION_FAILED', 'PARTIAL_FAILED', 'FAILED', 'SUCCEEDED'],
     ['MANIPULATION_FAILED', 'PARTIAL_FAILED', 'SUCCEEDED', 'FAILED'],

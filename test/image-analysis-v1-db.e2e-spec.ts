@@ -493,6 +493,8 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     const completedAt = new Date();
     models.manipulation = {
       ...result(),
+      modelName: 'FUSED',
+      modelVersion: 'FUSED-20-80-test',
       decision: 'MANIPULATION_SUSPECTED',
       displayScore: 99,
     };
