@@ -5,9 +5,25 @@ import {
   ImageModelPublicResultDto,
 } from './image-analysis-v1.dto';
 export type ModelKind = 'generation' | 'manipulation';
-export function pilotDecision(kind: ModelKind, score: number): AiModelDecision {
+export function pilotDecision(
+  kind: ModelKind,
+  score: number,
+  modelName?: string,
+  modelVersion?: string,
+): AiModelDecision {
   if (!Number.isFinite(score) || score < 0 || score > 1)
     throw new Error('Invalid raw score');
+  if (
+    kind === 'generation' &&
+    modelVersion?.startsWith('CuRe-probe-pe-core-l14-336-')
+  )
+    return score >= 0.5
+      ? 'AI_GENERATED_SUSPECTED'
+      : 'NO_CLEAR_GENERATION_SIGNAL';
+  if (kind === 'manipulation' && modelName === 'FUSED')
+    return score >= 0.19978919508866966
+      ? 'MANIPULATION_SUSPECTED'
+      : 'NO_CLEAR_MANIPULATION_SIGNAL';
   if (kind === 'generation')
     return score < 0.000004
       ? 'NO_CLEAR_GENERATION_SIGNAL'
