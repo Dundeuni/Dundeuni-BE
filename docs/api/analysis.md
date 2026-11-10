@@ -791,3 +791,10 @@ Gemini summaryStatus(PENDING/COMPLETED/FAILED)는 요약 작업 상태다.
 - null 점수는 미제공, [] 근거는 추가 근거 없음으로 표시하며 안전을 의미하지 않는다.
 - guides는 GET 전용 추가 필드다. POST 후 GET으로 상세·대응 안내를 받고 요약 상태는 /summary로 조회한다.
 - 고령층 대상 문구의 최종 UX 검토와 표시 순서는 FE/기획에서 확인한다.
+
+## 사진 후보 선택 후 분석 (Issue #23)
+
+기존 즉시 분석과 별개로 `POST /api/analysis/image-uploads`로 후보를 추출한 뒤,
+`POST /api/analysis/image-uploads/{uploadId}/analyses`에 elementId 한 개를 전송한다.
+선택 전에는 AI 분석을 호출하지 않는다. GET 상세 응답에는 nullable `photoSelection`이 추가된다.
+요청·응답, 좌표 기준, 제한, migration 및 탐지 정확도 한계는 [사진 요소 선택 명세](../PHOTO-ELEMENT-SELECTION.md)를 따른다.
