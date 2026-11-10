@@ -521,6 +521,30 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       'GENERATION_OR_MANIPULATION_SUSPECTED',
     );
   });
+  it('persists selected photo provenance and exposes it through detail lookup', async () => {
+    const selection = {
+      uploadId: randomUUID(),
+      elementId: randomUUID(),
+      bbox: { left: 10, top: 20, width: 100, height: 80 },
+      imageWidth: 400,
+      imageHeight: 300,
+      coordinateSpace: 'NORMALIZED_IMAGE' as const,
+      preprocessingVersion: 'gemini-photo-regions-v1',
+    };
+    const saved = await repository.create(
+      'development-user',
+      'selected-photo',
+      new Date(Date.now() + 60000),
+      selection,
+    );
+    const detail = await app
+      .get(AnalysisService)
+      .findOne('development-user', saved.id);
+    expect(detail.result.photoSelection).toEqual(selection);
+    expect(await repository.findWithModelResults(saved.id)).toMatchObject({
+      photoSelection: selection,
+    });
+  });
   it('returns null from repository for a missing analysisId', async () => {
     expect(await repository.findWithModelResults(randomUUID())).toBeNull();
   });

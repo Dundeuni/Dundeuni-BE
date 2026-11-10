@@ -1,3 +1,9 @@
+import {
+  PhotoSelectionController,
+  PhotoSelectionGuard,
+} from './photo-selection.controller';
+import { PhotoSelectionService } from './photo-selection.service';
+import { PhotoRegionDetector } from './photo-region.detector';
 import { AnalysisSummaryRepository } from './analysis-summary.repository';
 import { AnalysisSummaryWorker } from './analysis-summary.worker';
 import { GeminiSummaryClient } from './gemini-summary.client';
@@ -33,8 +39,11 @@ import {
       },
     }),
   ],
-  controllers: [AnalysisController],
+  controllers: [AnalysisController, PhotoSelectionController],
   providers: [
+    PhotoSelectionGuard,
+    PhotoSelectionService,
+    PhotoRegionDetector,
     UploadedImageCleanupInterceptor,
     PrismaService,
     AccessTokenGuard,

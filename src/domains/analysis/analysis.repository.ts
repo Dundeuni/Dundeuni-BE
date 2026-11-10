@@ -12,15 +12,27 @@ import {
   ImageModelPublicResultDto,
 } from './image-analysis-v1.dto';
 import { ImageAnalysisResult } from './image-analysis.service';
+import { PhotoSelectionMetadata } from './photo-selection.dto';
 
 @Injectable()
 export class AnalysisRepository {
   constructor(private readonly prisma: PrismaService) {}
-  create(userId: string, requestHash: string, expiresAt: Date) {
+  create(
+    userId: string,
+    requestHash: string,
+    expiresAt: Date,
+    photoSelection?: PhotoSelectionMetadata,
+  ) {
     return this.prisma.analysis.create({
       data: {
         userId,
         requestHash,
+        ...(photoSelection
+          ? {
+              photoSelection:
+                photoSelection as unknown as Prisma.InputJsonValue,
+            }
+          : {}),
         expiresAt,
         type: AnalysisType.IMAGE,
       },

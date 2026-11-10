@@ -39,6 +39,7 @@ describe('IMAGE analysis API', () => {
           id: randomUUID(),
           userId,
           requestHash,
+          photoSelection: null,
           expiresAt,
           type: 'IMAGE',
           status: 'QUEUED',

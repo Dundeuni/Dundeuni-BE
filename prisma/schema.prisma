@@ -55,6 +55,7 @@ model Analysis {
   userId            String
   type              AnalysisType
   status            AnalysisStatus @default(QUEUED)
+  photoSelection    Json?
   requestHash       String
   aiGenerationScore Float?
   aiRiskLevel       String?
