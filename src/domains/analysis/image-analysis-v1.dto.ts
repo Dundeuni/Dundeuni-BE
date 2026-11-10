@@ -56,7 +56,10 @@ export interface AiImageAnalysisResponseV1 {
 export class ImageModelPublicResultDto {
   @ApiProperty({ enum: ['SUCCEEDED', 'FAILED'] })
   status!: AiModelStatus;
-  @ApiProperty() modelName!: string;
+  @ApiProperty({
+    description: '모델 이름(CuRe/TruFor). 기존 modelName 필드를 유지합니다.',
+  })
+  modelName!: string;
   @ApiProperty() modelVersion!: string;
   @ApiProperty() policyVersion!: string;
   @ApiProperty({
@@ -80,6 +83,7 @@ export class ImageModelPublicResultDto {
   decision!: AiModelDecision | null;
   @ApiProperty({
     type: 'array',
+    description: '모델별 판단 근거. 공백·중복 제거, 없거나 실패한 모델은 빈 배열. 대응 안내는 GET guides에서 제공합니다.',
     items: {
       type: 'object',
       required: ['description'],
@@ -87,7 +91,12 @@ export class ImageModelPublicResultDto {
     },
   })
   reasons!: { description: string }[];
-  @ApiProperty({ type: [String] }) limitations!: string[];
+  @ApiProperty({
+    type: [String],
+    description:
+      '분석 한계. 공백·중복 제거, 없으면 빈 배열. 빈 배열은 한계가 없다는 보장이 아닙니다.',
+  })
+  limitations!: string[];
   @ApiProperty({ type: String, nullable: true }) errorCode!: string | null;
   @ApiProperty({
     type: Boolean,

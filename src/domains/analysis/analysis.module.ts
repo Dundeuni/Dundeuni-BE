@@ -1,3 +1,6 @@
+import { AnalysisSummaryRepository } from './analysis-summary.repository';
+import { AnalysisSummaryWorker } from './analysis-summary.worker';
+import { GeminiSummaryClient } from './gemini-summary.client';
 import { UploadedImageCleanupInterceptor } from './uploaded-image-cleanup.interceptor';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -36,6 +39,9 @@ import {
     PrismaService,
     AccessTokenGuard,
     AnalysisService,
+    AnalysisSummaryRepository,
+    AnalysisSummaryWorker,
+    GeminiSummaryClient,
     AnalysisRepository,
     AnalysisUsageService,
     ImageAnalysisService,
