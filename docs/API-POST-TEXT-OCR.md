@@ -36,3 +36,9 @@ Swagger는 미디어 타입별 스키마를 분리하고 멱등성 키를 선택
 `upstreamPath`(호출 경로), `ngrokErrorCode`(응답의 `ngrok-error-code`, 없으면 null).
 오류 헤더는 숫자 또는 ERR_NGROK_숫자 형식만 허용하며 임의 헤더 값은 출력하지 않는다.
 FE에서 새 분석을 한 번 요청하고 `startedAt`과 ngrok 요청 기록을 대조한다.
+
+정상 처리 로그(LOG): AI 요청 직전에 `TEXT_AI_CALL_STARTED`, 응답 검증과 DB 결과 저장이
+모두 끝나면 `TEXT_AI_CALL_SUCCEEDED`를 기록한다. 공통으로 analysisId, sourceType,
+startedAt(UTC), upstreamHost, upstreamPath를 포함한다. 성공 로그에는 upstreamStatus=200,
+저장된 status, durationMs를 추가하며 판정 결과·원문은 출력하지 않는다.
+멱등성 키로 완료 결과를 재조회하면 새로운 AI 호출이 없으므로 호출 로그도 추가하지 않는다.

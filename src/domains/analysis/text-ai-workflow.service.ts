@@ -124,6 +124,22 @@ export class TextAiWorkflowService {
       );
     }
     const startedAt = Date.now();
+    const endpoint =
+      sourceType === 'TEXT'
+        ? '/internal/v1/text-analyses'
+        : '/internal/v1/text-analyses/image';
+    const base = this.config.get<string>('AI_SERVICE_BASE_URL');
+    const configuredUrl =
+      base && URL.canParse(endpoint, base)
+        ? new URL(endpoint, base)
+        : undefined;
+    const logContext = {
+      analysisId: analysis.id,
+      sourceType,
+      startedAt: new Date(startedAt).toISOString(),
+      upstreamHost: configuredUrl?.host ?? null,
+      upstreamPath: configuredUrl?.pathname ?? null,
+    };
     let responseReceived = false;
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -144,6 +160,7 @@ export class TextAiWorkflowService {
         );
       const elementId = randomUUID();
       const deadline = Date.now() + timeout;
+      this.logger.log({ event: 'TEXT_AI_CALL_STARTED', ...logContext });
       const value = await Promise.race([
         'text' in input
           ? this.provider.analyze(
@@ -174,6 +191,13 @@ export class TextAiWorkflowService {
         analysis.id,
         storedTextRiskResult(result),
       );
+      this.logger.log({
+        event: 'TEXT_AI_CALL_SUCCEEDED',
+        ...logContext,
+        upstreamStatus: 200,
+        status: saved.status,
+        durationMs: Date.now() - startedAt,
+      });
       return this.response(saved);
     } catch (error) {
       if (error instanceof TextAnalysisError) {
