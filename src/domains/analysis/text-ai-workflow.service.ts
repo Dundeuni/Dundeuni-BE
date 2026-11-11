@@ -177,8 +177,22 @@ export class TextAiWorkflowService {
       return this.response(saved);
     } catch (error) {
       if (error instanceof TextAnalysisError) {
+        const endpoint =
+          sourceType === 'TEXT'
+            ? '/internal/v1/text-analyses'
+            : '/internal/v1/text-analyses/image';
+        const base = this.config.get<string>('AI_SERVICE_BASE_URL');
+        const configuredUrl =
+          base && URL.canParse(endpoint, base)
+            ? new URL(endpoint, base)
+            : undefined;
         this.logger.warn({
           event: 'TEXT_AI_CALL_FAILED',
+          startedAt: new Date(startedAt).toISOString(),
+          upstreamHost: error.transport?.host ?? configuredUrl?.host ?? null,
+          upstreamPath:
+            error.transport?.path ?? configuredUrl?.pathname ?? null,
+          ngrokErrorCode: error.transport?.ngrokErrorCode ?? null,
           analysisId: analysis.id,
           sourceType,
           endpoint:

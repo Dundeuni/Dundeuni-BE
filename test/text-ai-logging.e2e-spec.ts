@@ -45,7 +45,13 @@ describe('TEXT AI failure diagnostics', () => {
         transport.mockResolvedValue(
           new Response(
             scenario === 'invalid contract' ? '{}' : 'private upstream body',
-            { status: status! },
+            {
+              status: status!,
+              headers:
+                scenario === 'offline tunnel'
+                  ? { 'ngrok-error-code': 'ERR_NGROK_3200' }
+                  : {},
+            },
           ),
         );
       const service = new TextAiWorkflowService(
@@ -61,6 +67,10 @@ describe('TEXT AI failure diagnostics', () => {
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith({
         event: 'TEXT_AI_CALL_FAILED',
+        startedAt: expect.any(String),
+        upstreamHost: 'test.invalid',
+        upstreamPath: '/internal/v1/text-analyses',
+        ngrokErrorCode: scenario === 'offline tunnel' ? 'ERR_NGROK_3200' : null,
         analysisId,
         sourceType: 'TEXT',
         endpoint: '/internal/v1/text-analyses',

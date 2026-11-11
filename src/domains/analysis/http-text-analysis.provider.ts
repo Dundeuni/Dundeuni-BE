@@ -79,9 +79,15 @@ export class HttpTextAnalysisProvider implements TextAnalysisProvider {
   ): Promise<unknown> {
     let phase: 'NETWORK' | 'INVALID_RESPONSE' = 'NETWORK';
     let upstreamStatus: number | undefined;
+    const url = new URL(path, this.base);
+    const transport = {
+      host: url.host,
+      path: url.pathname,
+      ngrokErrorCode: null as string | null,
+    };
     try {
       signal.throwIfAborted();
-      const response = await fetch(new URL(path, this.base), {
+      const response = await fetch(url, {
         method: 'POST',
         body,
         headers: { ...headers, Authorization: `Bearer ${this.token}` },
@@ -89,14 +95,20 @@ export class HttpTextAnalysisProvider implements TextAnalysisProvider {
         redirect: 'error',
       });
       upstreamStatus = response.status;
+      const ngrokCode = response.headers.get('ngrok-error-code');
+      transport.ngrokErrorCode =
+        ngrokCode && /^(?:ERR_NGROK_)?[0-9]{1,10}$/.test(ngrokCode)
+          ? ngrokCode
+          : null;
       if (response.status !== 200) {
         await response.body?.cancel();
-        throw new TextAnalysisError('UPSTREAM', response.status);
+        throw new TextAnalysisError('UPSTREAM', response.status, transport);
       }
       phase = 'INVALID_RESPONSE';
       // Bound an untrusted response, including its raw text/OCR echo. Never persist or log it.
       const reader = response.body?.getReader();
-      if (!reader) throw new TextAnalysisError(phase);
+      if (!reader)
+        throw new TextAnalysisError(phase, upstreamStatus, transport);
       const chunks: Uint8Array[] = [];
       let size = 0;
       try {
@@ -106,7 +118,7 @@ export class HttpTextAnalysisProvider implements TextAnalysisProvider {
           size += value.length;
           if (size > 512 * 1024) {
             await reader.cancel();
-            throw new TextAnalysisError(phase);
+            throw new TextAnalysisError(phase, upstreamStatus, transport);
           }
           chunks.push(value);
         }
@@ -120,6 +132,7 @@ export class HttpTextAnalysisProvider implements TextAnalysisProvider {
       throw new TextAnalysisError(
         signal.aborted ? 'TIMEOUT' : phase,
         upstreamStatus,
+        transport,
       );
     }
   }

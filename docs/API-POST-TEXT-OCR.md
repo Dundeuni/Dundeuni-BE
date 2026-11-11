@@ -31,3 +31,8 @@ Swagger는 미디어 타입별 스키마를 분리하고 멱등성 키를 선택
 `failureKind`는 UPSTREAM, NETWORK, TIMEOUT, INVALID_RESPONSE로 구분한다.
 토큰, 사용자 ID, 입력 문자열·이미지, upstream 응답 본문 및 원본 예외 메시지는 출력하지 않는다.
 공개 API의 503/ANALYSIS503 응답 계약은 유지한다.
+
+추가 진단 필드: `startedAt`(UTC ISO 시각), `upstreamHost`(실제 호출 호스트와 포트),
+`upstreamPath`(호출 경로), `ngrokErrorCode`(응답의 `ngrok-error-code`, 없으면 null).
+오류 헤더는 숫자 또는 ERR_NGROK_숫자 형식만 허용하며 임의 헤더 값은 출력하지 않는다.
+FE에서 새 분석을 한 번 요청하고 `startedAt`과 ngrok 요청 기록을 대조한다.
