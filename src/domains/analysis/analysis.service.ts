@@ -111,7 +111,12 @@ export class AnalysisService {
       const claim =
         idempotencyKey === undefined
           ? {
-              analysis: await this.repository.create(userId, hash, expiresAt, photoSelection),
+              analysis: await this.repository.create(
+                userId,
+                hash,
+                expiresAt,
+                photoSelection,
+              ),
               claimed: true,
             }
           : await this.repository.claim(
@@ -261,6 +266,8 @@ export class AnalysisService {
       message: '분석 결과 조회에 성공했습니다.',
       result: {
         ...this.response(row).result,
+        textResult: row.textResult ?? null,
+        textPreview: row.textPreview ?? null,
         photoSelection: row.photoSelection ?? null,
         models:
           row.imageResultStatus === null

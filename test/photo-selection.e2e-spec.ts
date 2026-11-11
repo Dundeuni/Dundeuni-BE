@@ -55,17 +55,19 @@ describe('photo selection workflow', () => {
     expect(analysis.create).not.toHaveBeenCalled();
     expect(f.buffer.every((x) => x === 0)).toBe(true);
     const { uploadId, elements } = uploaded.result;
-    analysis.create.mockImplementation(async (_owner, selected, metadata) => {
-      const m = await sharp(selected.buffer).metadata();
-      expect([m.width, m.height]).toEqual([100, 80]);
-      expect(metadata).toMatchObject({
-        selectionType: 'PHOTO_REGION',
-        uploadId,
-        elementId: elements[0].elementId,
-        bbox,
-      });
-      return { isSuccess: true };
-    });
+    analysis.create.mockImplementation(
+      async (_owner, selected, _key, metadata) => {
+        const m = await sharp(selected.buffer).metadata();
+        expect([m.width, m.height]).toEqual([100, 80]);
+        expect(metadata).toMatchObject({
+          selectionType: 'PHOTO_REGION',
+          uploadId,
+          elementId: elements[0].elementId,
+          bbox,
+        });
+        return { isSuccess: true };
+      },
+    );
     await service.select('alice', uploadId, elements[0].elementId);
     expect(analysis.create).toHaveBeenCalledTimes(1);
     expect(() => service.read('alice', uploadId)).toThrow();
@@ -89,12 +91,14 @@ describe('photo selection workflow', () => {
       bbox: { left: 0, top: 0, width: 80, height: 120 },
     });
     expect(analysis.create).not.toHaveBeenCalled();
-    analysis.create.mockImplementation(async (_owner, selected, metadata) => {
-      expect(selected.buffer.equals(original)).toBe(true);
-      expect(selected.mimetype).toBe('image/jpeg');
-      expect(metadata.selectionType).toBe('ORIGINAL');
-      return { isSuccess: true };
-    });
+    analysis.create.mockImplementation(
+      async (_owner, selected, _key, metadata) => {
+        expect(selected.buffer.equals(original)).toBe(true);
+        expect(selected.mimetype).toBe('image/jpeg');
+        expect(metadata.selectionType).toBe('ORIGINAL');
+        return { isSuccess: true };
+      },
+    );
     await service.select('alice', u.uploadId, u.original.elementId);
     expect(analysis.create).toHaveBeenCalledTimes(1);
     expect(() => service.read('alice', u.uploadId)).toThrow();

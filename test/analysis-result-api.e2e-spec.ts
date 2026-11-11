@@ -67,7 +67,10 @@ describe('analysis result GET API', () => {
         { provide: AnalysisSummaryRepository, useValue: {} },
         { provide: ImageAnalysisService, useValue: {} },
         { provide: AnalysisUsageService, useValue: {} },
-        { provide: ConfigService, useValue: new ConfigService() },
+        {
+          provide: ConfigService,
+          useValue: new ConfigService({ NODE_ENV: 'development' }),
+        },
       ],
     }).compile();
     app = module.createNestApplication();

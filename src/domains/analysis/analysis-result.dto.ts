@@ -22,6 +22,8 @@ export class AnalysisOverallResultDto implements ImageOverallResult {
   uncertainKinds!: ImageOverallResult['uncertainKinds'];
 }
 export class AnalysisResultDto {
+  @ApiProperty({ type: Object, nullable: true }) textResult!: unknown;
+  @ApiProperty({ nullable: true }) textPreview!: string | null;
   @ApiProperty({
     type: Object,
     nullable: true,
@@ -30,7 +32,7 @@ export class AnalysisResultDto {
   })
   photoSelection!: unknown;
   @ApiProperty({ format: 'uuid' }) analysisId!: string;
-  @ApiProperty({ enum: ['IMAGE', 'TEXT', 'URL'] }) type!: string;
+  @ApiProperty({ enum: ['IMAGE', 'TEXT', 'URL', 'PHONE'] }) type!: string;
   @ApiProperty({ enum: ['QUEUED', 'ANALYZING', 'COMPLETED', 'FAILED'] })
   status!: string;
   @ApiProperty({

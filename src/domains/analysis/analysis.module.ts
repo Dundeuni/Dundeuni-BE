@@ -1,3 +1,5 @@
+import { AccessTokenGuard } from '../../common/auth/access-token.guard';
+import { HistoryController } from './history.controller';
 import {
   PhotoSelectionController,
   PhotoSelectionGuard,
@@ -7,6 +9,12 @@ import { PhotoRegionDetector } from './photo-region.detector';
 import { AnalysisSummaryRepository } from './analysis-summary.repository';
 import { AnalysisSummaryWorker } from './analysis-summary.worker';
 import { GeminiSummaryClient } from './gemini-summary.client';
+import { HttpModule } from '@nestjs/axios';
+import { PhoneAnalysisController } from './phone-analysis.controller';
+import { PhoneAnalysisService } from './phone-analysis.service';
+import { PhoneAnalysisRepository } from './phone-analysis.repository';
+import { PhoneRiskService } from './phone-risk.service';
+import { ApickPhoneProvider } from './apick-phone.provider';
 import { UploadedImageCleanupInterceptor } from './uploaded-image-cleanup.interceptor';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -31,6 +39,7 @@ import {
 
 @Module({
   imports: [
+    HttpModule,
     MulterModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
@@ -44,14 +53,24 @@ import {
       },
     }),
   ],
-  controllers: [AnalysisController, PhotoSelectionController],
+  controllers: [
+    HistoryController,
+    AnalysisController,
+    PhotoSelectionController,
+    PhoneAnalysisController,
+  ],
   providers: [
     PhotoSelectionGuard,
     PhotoSelectionService,
     PhotoRegionDetector,
+    PhoneAnalysisService,
+    PhoneAnalysisRepository,
+    PhoneRiskService,
+    ApickPhoneProvider,
     UploadedImageCleanupInterceptor,
     PrismaService,
     RequestUserGuard,
+    AccessTokenGuard,
     AnalysisService,
     AnalysisSummaryRepository,
     AnalysisSummaryWorker,

@@ -21,7 +21,10 @@ describe('summary HTTP API', () => {
         UploadedImageCleanupInterceptor,
         { provide: AnalysisService, useValue: {} },
         { provide: PrismaService, useValue: prisma },
-        { provide: ConfigService, useValue: new ConfigService() },
+        {
+          provide: ConfigService,
+          useValue: new ConfigService({ NODE_ENV: 'development' }),
+        },
       ],
     }).compile();
     app = module.createNestApplication();

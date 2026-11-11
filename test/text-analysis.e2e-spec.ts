@@ -26,6 +26,7 @@ describe('TEXT analysis JSON API with real Service/Repository and mocked Prisma 
       .useValue(
         new ConfigService({
           NODE_ENV: 'development',
+          TEXT_AI_PROVIDER: 'disabled',
           ANALYSIS_MAX_FILE_BYTES: '100000',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '100',
