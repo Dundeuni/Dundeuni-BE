@@ -1,6 +1,6 @@
 # PB-04 전화번호 분석
 
-POST `/api/analyses/phone`, Authorization: Bearer JWT 필수.
+POST `/api/analyses/phone`, 로그인 및 Authorization 헤더 불필요. 시연 기록은 공통 `development-user`로 저장한다.
 
 ```json
 {"phoneNumber":"010-1234-5678"}
@@ -12,7 +12,7 @@ POST `/api/analyses/phone`, Authorization: Bearer JWT 필수.
 {"analysisId":"d734f69e-ce2e-4914-8a2e-230713d37c96","status":"COMPLETED"}
 ```
 
-Swagger: `/api/docs`. 기존 JWT 검증 및 오류 envelope 재사용. 인증 오류 코드는 기존 `AUTH401` 유지.
+Swagger: `/api/docs`. 기존 오류 envelope 재사용. 사용자 로그인 인증은 적용하지 않는다. APICK 서비스 인증은 서버에서 유지한다.
 입력 오류 `INVALID_PHONE_NUMBER`(400), APICK 연결/서버/타임아웃/계약 오류 `EXTERNAL_API_UNAVAILABLE`(503),
 포인트/한도 `APICK_QUOTA_EXCEEDED`(503), 외부 인증 오류 `APICK_AUTHENTICATION_FAILED`(503),
 키 미설정 `APICK_CONFIGURATION_ERROR`(500), DB 오류 `INTERNAL_SERVER_ERROR`(500).
@@ -63,6 +63,6 @@ PB-05는 소유권·만료 검사 후 이 관계를 읽는 방식으로 확장�
 실제 DB migration 적용 및 유료 APICK 연동 검증은 자동 테스트와 별개다.
 
 수동 통합 검증은 운영 설정과 분리한 환경에서 키를 설정하고 migration을 적용한 뒤,
-Swagger에서 테스트 JWT와 검증할 번호로 위 요청을 실행한다. **APICK 포인트가 소모될 수 있다.**
+Swagger에서 검증할 번호로 위 요청을 실행한다. **APICK 포인트가 소모될 수 있다.**
 201 응답 및 DB의 COMPLETED/마스킹/정규화 필드를 확인한다.
 이 작업 중 실제 APICK 호출과 실제 DB migration 적용은 수행하지 않았다.

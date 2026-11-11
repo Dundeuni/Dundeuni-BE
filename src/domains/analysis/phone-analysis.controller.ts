@@ -1,20 +1,6 @@
-import { RequestUserGuard } from '../../common/auth/request-user.guard';
-import {
-  Body,
-  Controller,
-  Post,
-  Req,
-  UseFilters,
-  UseGuards,
-} from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiBody,
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
-import { AuthenticatedRequest } from '../../common/auth/access-token.guard';
+import { DEVELOPMENT_USER_ID } from '../../common/auth/request-user.guard';
+import { Body, Controller, Post, UseFilters } from '@nestjs/common';
+import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ApiErrorFilter } from '../../common/http/api-error';
 import {
   PhoneAnalysisRequestDto,
@@ -23,9 +9,7 @@ import {
 import { PhoneAnalysisService } from './phone-analysis.service';
 
 @ApiTags('Analysis')
-@ApiBearerAuth()
 @Controller('analyses/phone')
-@UseGuards(RequestUserGuard)
 @UseFilters(ApiErrorFilter)
 export class PhoneAnalysisController {
   constructor(private readonly service: PhoneAnalysisService) {}
@@ -33,7 +17,7 @@ export class PhoneAnalysisController {
   @ApiOperation({
     summary: '[PB-04] 전화번호 동기 분석 요청',
     description:
-      'JWT 필수. APICK 조회 후 마스킹한 번호와 결과 저장. 분석 ID는 기존 UUID 형식. 상세 조회는 PB-05 범위.',
+      '로그인 없이 호출 가능. 시연 기록은 development-user로 저장. APICK 조회 후 마스킹한 번호와 결과 저장. 분석 ID는 기존 UUID 형식. 상세 조회는 PB-05 범위.',
   })
   @ApiBody({ type: PhoneAnalysisRequestDto })
   @ApiResponse({
@@ -49,10 +33,6 @@ export class PhoneAnalysisController {
     description: 'INVALID_PHONE_NUMBER: 문자열 필수, 한국 번호 형식 오류',
   })
   @ApiResponse({
-    status: 401,
-    description: 'AUTH401: JWT 누락/만료/무효 (기존 인증 코드)',
-  })
-  @ApiResponse({
     status: 503,
     description:
       'EXTERNAL_API_UNAVAILABLE / APICK_QUOTA_EXCEEDED / APICK_AUTHENTICATION_FAILED',
@@ -62,10 +42,7 @@ export class PhoneAnalysisController {
     description:
       'APICK_CONFIGURATION_ERROR: APICK_AUTH_KEY 미설정 / INTERNAL_SERVER_ERROR: DB 또는 내부 오류',
   })
-  create(
-    @Req() request: AuthenticatedRequest,
-    @Body() body: PhoneAnalysisRequestDto,
-  ) {
-    return this.service.create(request.user.id, body?.phoneNumber);
+  create(@Body() body: PhoneAnalysisRequestDto) {
+    return this.service.create(DEVELOPMENT_USER_ID, body?.phoneNumber);
   }
 }

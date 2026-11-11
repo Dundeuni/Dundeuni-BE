@@ -4,24 +4,15 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { of, throwError } from 'rxjs';
 import request from 'supertest';
-import { createHmac } from 'node:crypto';
 import { PhoneAnalysisController } from '../src/domains/analysis/phone-analysis.controller';
 import { PhoneAnalysisService } from '../src/domains/analysis/phone-analysis.service';
 import { PhoneAnalysisRepository } from '../src/domains/analysis/phone-analysis.repository';
 import { PhoneRiskService } from '../src/domains/analysis/phone-risk.service';
 import { ApickPhoneProvider } from '../src/domains/analysis/apick-phone.provider';
-import { AccessTokenGuard } from '../src/common/auth/access-token.guard';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 
 const secret = 'phone-test-secret';
-const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
-  'base64url',
-);
-const payload = Buffer.from(
-  JSON.stringify({ sub: 'user-19', exp: 9999999999 }),
-).toString('base64url');
-const token = `${header}.${payload}.${createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url')}`;
 const wire = (data: object = {}) => ({
   data: {
     success: 1,
@@ -48,7 +39,6 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
         PhoneAnalysisRepository,
         PhoneRiskService,
         ApickPhoneProvider,
-        AccessTokenGuard,
         { provide: ConfigService, useValue: { get: () => secret } },
         { provide: HttpService, useValue: { post } },
         { provide: PrismaService, useValue: { analysis: { create, update } } },
@@ -76,7 +66,6 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
   const send = (phoneNumber: unknown = '01012345678') =>
     request(app.getHttpServer())
       .post('/api/analyses/phone')
-      .auth(token, { type: 'bearer' })
       .send({ phoneNumber });
   test.each([
     '01012345678',
@@ -92,7 +81,7 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
       status: 'COMPLETED',
     });
     expect(create.mock.calls[0][0].data).toMatchObject({
-      userId: 'user-19',
+      userId: 'development-user',
       type: 'PHONE',
       status: 'ANALYZING',
     });
@@ -120,15 +109,15 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
     expect(create).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
   });
-  test('requires JWT', async () => {
+  test('accepts requests without JWT', async () => {
     expect(
       (
         await request(app.getHttpServer())
           .post('/api/analyses/phone')
           .send({ phoneNumber: '01012345678' })
       ).status,
-    ).toBe(401);
-    expect(post).not.toHaveBeenCalled();
+    ).toBe(201);
+    expect(post).toHaveBeenCalledTimes(1);
   });
   test('normalizes range counts and preserves source, excludes number', async () => {
     post.mockReturnValue(
@@ -222,14 +211,12 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
     update.mockRejectedValue(new Error('db'));
     expect((await send()).body.code).toBe('INTERNAL_SERVER_ERROR');
   });
-  test('documents route and authentication', () => {
+  test('documents route without authentication', () => {
     const doc = SwaggerModule.createDocument(
       app,
       new DocumentBuilder().addBearerAuth().build(),
     );
-    expect(doc.paths['/api/analyses/phone'].post?.security).toEqual([
-      { bearer: [] },
-    ]);
+    expect(doc.paths['/api/analyses/phone'].post?.security).toBeUndefined();
     expect(
       doc.paths['/api/analyses/phone'].post?.responses['201'],
     ).toBeDefined();
