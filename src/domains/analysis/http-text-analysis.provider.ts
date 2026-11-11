@@ -78,6 +78,7 @@ export class HttpTextAnalysisProvider implements TextAnalysisProvider {
     signal: AbortSignal,
   ): Promise<unknown> {
     let phase: 'NETWORK' | 'INVALID_RESPONSE' = 'NETWORK';
+    let upstreamStatus: number | undefined;
     try {
       signal.throwIfAborted();
       const response = await fetch(new URL(path, this.base), {
@@ -87,6 +88,7 @@ export class HttpTextAnalysisProvider implements TextAnalysisProvider {
         signal,
         redirect: 'error',
       });
+      upstreamStatus = response.status;
       if (response.status !== 200) {
         await response.body?.cancel();
         throw new TextAnalysisError('UPSTREAM', response.status);
@@ -115,7 +117,10 @@ export class HttpTextAnalysisProvider implements TextAnalysisProvider {
       }
     } catch (error) {
       if (error instanceof ApiError) throw error;
-      throw new TextAnalysisError(signal.aborted ? 'TIMEOUT' : phase);
+      throw new TextAnalysisError(
+        signal.aborted ? 'TIMEOUT' : phase,
+        upstreamStatus,
+      );
     }
   }
 }

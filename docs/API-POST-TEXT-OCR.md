@@ -21,3 +21,13 @@ TEXT와 캡처는 Analysis.type=TEXT로 저장하고 완료 응답 메타데이�
 Swagger는 미디어 타입별 스키마를 분리하고 멱등성 키를 선택 헤더 하나로 제공한다. multipart에서 IMAGE는 sourceType 필드 자체를 생략하고, TEXT는 SCREEN_CROP을 선택한다. 문자열은 DIRECT 또는 생략. 멱등성·AI 인증·timeout/abort·오류 변환·AI 컨텍스트 검증·기존 IMAGE 모델별 저장을 유지한다.
 
 테스트는 POST 요청 검증, AI HTTP 전송, 결과 저장을 검사하며 #15 테스트는 GET 구현을 요구하지 않는다. 실제 OCR 엔진 및 피싱 모델의 연속 실행은 AI 서버 구현의 책임이고 Mock 응답 검증으로 실추론 성공을 주장하지 않는다.
+
+## TEXT AI 실패 진단 로그
+
+텍스트 및 캡처 AI 호출 실패는 `TextAiWorkflowService`에서 WARN 이벤트
+`TEXT_AI_CALL_FAILED`로 기록한다. 필드는 `analysisId`, `sourceType`, `endpoint`,
+`failureKind`, `upstreamStatus`, `durationMs`다. HTTP 응답을 받지 못한 네트워크 실패·시간 초과의
+`upstreamStatus`는 null이며, HTTP 200 응답의 JSON/계약 검증 실패는 200으로 기록한다.
+`failureKind`는 UPSTREAM, NETWORK, TIMEOUT, INVALID_RESPONSE로 구분한다.
+토큰, 사용자 ID, 입력 문자열·이미지, upstream 응답 본문 및 원본 예외 메시지는 출력하지 않는다.
+공개 API의 503/ANALYSIS503 응답 계약은 유지한다.

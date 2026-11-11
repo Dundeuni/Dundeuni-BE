@@ -123,6 +123,8 @@ export class TextAiWorkflowService {
         'TEXT 분석 요청 저장에 실패했습니다.',
       );
     }
+    const startedAt = Date.now();
+    let responseReceived = false;
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -162,6 +164,7 @@ export class TextAiWorkflowService {
       ]);
       if (abort.signal.aborted || Date.now() >= deadline)
         throw new TextAnalysisError('TIMEOUT');
+      responseReceived = true;
       const result = validateTextRiskResponse(value, {
         analysisId: analysis.id,
         elementId,
@@ -173,6 +176,21 @@ export class TextAiWorkflowService {
       );
       return this.response(saved);
     } catch (error) {
+      if (error instanceof TextAnalysisError) {
+        this.logger.warn({
+          event: 'TEXT_AI_CALL_FAILED',
+          analysisId: analysis.id,
+          sourceType,
+          endpoint:
+            sourceType === 'TEXT'
+              ? '/internal/v1/text-analyses'
+              : '/internal/v1/text-analyses/image',
+          failureKind: error.failureKind,
+          upstreamStatus:
+            error.upstreamStatus ?? (responseReceived ? 200 : null),
+          durationMs: Date.now() - startedAt,
+        });
+      }
       const failure =
         error instanceof ApiError
           ? error

@@ -97,6 +97,7 @@ describe('deployed TEXT/OCR HTTP contract with mocked transport', () => {
       ).rejects.toMatchObject({
         status: 503,
         failureKind: 'UPSTREAM',
+        upstreamStatus: status,
         response: { code: 'ANALYSIS503', result: null },
       });
       expect(transport).toHaveBeenCalledTimes(1);
@@ -118,7 +119,10 @@ describe('deployed TEXT/OCR HTTP contract with mocked transport', () => {
         input(),
         new AbortController().signal,
       ),
-    ).rejects.toMatchObject({ failureKind: 'INVALID_RESPONSE' });
+    ).rejects.toMatchObject({
+      failureKind: 'INVALID_RESPONSE',
+      upstreamStatus: 200,
+    });
   });
   it.each([
     'score',
