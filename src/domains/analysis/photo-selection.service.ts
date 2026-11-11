@@ -250,6 +250,7 @@ export class PhotoSelectionService implements OnModuleDestroy {
           originalname:
             mime === 'image/jpeg' ? 'selected-photo.jpg' : 'selected-photo.png',
         } as Express.Multer.File,
+        undefined,
         {
           uploadId: id,
           elementId,

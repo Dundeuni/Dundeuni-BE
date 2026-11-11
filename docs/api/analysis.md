@@ -1,6 +1,6 @@
 # Analysis API
 
-현재 요청 유형은 `SCREEN`, `IMAGE`, `TEXT`이며 IMAGE만 구현되어 있습니다. `VIDEO`, `PHONE`, `QR`은 P1 이후 별도 이슈로 확장합니다.
+분석 유형은 `IMAGE`, `TEXT`, `URL`을 P0으로 우선 지원합니다. `VIDEO`, `PHONE`, `QR`은 P1 이후 별도 이슈로 확장합니다.
 
 AI 생성·변조 가능성과 사기 위험은 하나의 점수로 합치지 않고 별도 결과와 판단 근거를 반환합니다.
 
@@ -10,10 +10,10 @@ AI 생성·변조 가능성과 사기 위험은 하나의 점수로 합치지 �
 모든 요청은 임시 사용자 `development-user`로 저장한다. 로그인 구현 후 Guard와 인증 사용자 ID를 복원한다.
 
 요청은 `multipart/form-data`이며 필드는 `type=IMAGE`, `file`이다.
-DB `AnalysisType`은 IMAGE/TEXT/URL을 유지하며 SCREEN/TEXT 및 기존 URL 요청은 현재 400으로 거부한다.
-SCREEN/TEXT 요청의 오류 메시지는 현재 IMAGE만 지원한다는 점을 명시한다.
+P0 `AnalysisType`은 IMAGE/TEXT/URL이다. IMAGE는 multipart, TEXT는 JSON을 지원하며 URL은 400으로 거부한다.
+TEXT 요청·응답은 문서 하단 Issue #13 절을 따른다.
 JPEG(`image/jpeg`, `.jpg`/`.jpeg`)와 PNG(`image/png`, `.png`)만 허용한다.
-MIME, 확장자, 파일 시그니처 및 크기를 확인한 후 sharp로 픽셀을 디코딩한다. 빈 파일과 손상되거나 읽을 수 없는 이미지는 400으로 거부하며 DB 저장·이용량 예약·Provider 호출 전에 검증한다.
+MIME, 확장자, 파일 시그니처 및 크기를 확인한다. sharp 전체 이미지 디코딩 검증도 저장·Provider 호출 전에 수행한다.
 `ANALYSIS_MAX_FILE_BYTES`로 상한을 설정한다. `.env.example`의 10 MiB는 개발 제안값이며 운영 정책 확정이 필요하다.
 
 ```bash
@@ -71,7 +71,7 @@ Analysis Controller에만 필터를 적용해 기존 Health 응답은 유지한�
 
 | HTTP | code        | 상황                                                |
 | ---- | ----------- | --------------------------------------------------- |
-| 400  | COMMON400   | type/file 누락, 빈/손상 이미지, IMAGE 이외의 type, 잘못된 multipart |
+| 400  | COMMON400   | type/file 누락, IMAGE 이외의 type, 잘못된 multipart |
 | 413  | COMMON413   | 크기 초과                                           |
 | 415  | COMMON415   | MIME/확장자/시그니처 불일치                         |
 | 429  | USAGE429    | 이용량 초과 (Usage 연동 후 실제 적용)               |
@@ -100,6 +100,7 @@ IMAGE 유형+MIME+이미지 바이트 SHA-256을 requestHash로 저장하지만 
 - 실제 Usage와 Analysis 간 원자성/실패 복구 정책 확정. 구독 시스템은 이번 범위에서 구현하지 않음.
 - aiRiskLevel enum, 인증 issuer/audience, 파일 크기, 기록 동의·보관·삭제 정책 확정.
 - TEXT/URL 분석은 후속 구현. GET /api/analysis/{analysisId}는 아래 #89 계약을 따른다.
+- TEXT AI 연동은 #96, URL 분석과 GET /api/analysis/{analysisId}는 후속 구현.
 
 ### 설치/검증
 
@@ -551,6 +552,76 @@ Railway 주소·권한을 받기 전에는 로컬 검증을 Railway 검증으로
 ### GET `/api/analysis/{analysisId}/summary`
 
 Body 없음. analysisId는 UUID. 현재 개발용 인증 생략 정책을 유지하며 `development-user` 기록만 조회한다. 인증 미들웨어/Guard가 적용되면 서버가 설정한 `request.user.id`로 조회한다. 인증 복원은 별도 작업이다.
+## PB-23 보완 (2026-10-19, 이전 멱등성 제거 설명을 대체)
+
+선택적 `Idempotency-Key` 헤더를 지원한다. 1~128자의 공백 없는 ASCII 문자열이며
+현재 임시 사용자 `development-user` 범위로 적용된다. 실제 인증은 구현하지 않았다.
+요청 내용은 기존 requestHash(IMAGE + MIME + 이미지 바이트 SHA-256)로 비교한다.
+파일명은 요청 내용에 포함하지 않는다. 키 없이 요청하면 매번 새 분석이다.
+
+| 동일 사용자/키의 상태 | 응답 및 실행 정책 |
+| --- | --- |
+| 다른 요청 내용 | 409 COMMON409 |
+| 만료됨 | 409 COMMON409, 새 키 필요 |
+| QUEUED / ANALYZING | 409 COMMON409, 같은 키로 나중에 재요청 |
+| COMPLETED | 기존 분석의 202/ANALYSIS202 응답 재사용 |
+| FAILED | 저장된 오류 코드/상태를 재사용, 일반화된 실패 메시지 |
+
+서로 다른 키는 동일 이미지여도 별도 실행한다. 실패 후 새 실행에는 새 키가 필요하다.
+처리 중에 202 미완료 결과를 반환하지 않으므로 기존 동기식 성공 응답 필드를 유지한다.
+DB unique(userId, idempotencyKey)의 insert 성공자만 AI/사용량 예약을 실행한다.
+충돌자는 기존 행만 조회하며 자동 재시도·추가 AI 호출을 하지 않는다.
+키는 분석 보관 수명 동안 유지해야 한다. 행 삭제 후 같은 키는 새 요청으로 취급된다.
+프로세스가 비정상 종료되어 QUEUED/ANALYZING에 남으면 만료까지 409이며 자동 재실행하지 않는다.
+
+Migration `20261019000000_analysis_idempotency`는 nullable VARCHAR(128) 컬럼과
+복합 unique index만 추가한다. 기존 행은 NULL이므로 중복 없이 보존한다.
+이전 migration은 수정하지 않는다. DB 적용은 하지 않았다.
+배포 시 새 코드 실행 전에 migration이 필요하며, 큰 테이블의 index 생성 잠금은 배포 시 고려한다.
+
+AI 오류의 공개 응답은 기존 ApiError 계약을 유지한다. 내부 failureKind로 TIMEOUT,
+NETWORK, UPSTREAM, INVALID_RESPONSE를 구분한다. 내부 응답/토큰/스택을 응답이나 로그에 넣지 않는다.
+실패 저장과 사용량 해제는 각각 시도하며, 이들의 실패는 일반화된 서버 로그만 남기고
+최초 오류를 덮어쓰지 않는다. DB 장애 시 FAILED 저장 성공 자체를 보장하지는 못한다.
+Usage는 여전히 TODO이며 실제 차감·해제는 수행하지 않는다.
+
+타임아웃은 provider 호출에만 적용한다. Promise.race의 종료 후 늦은 provider 결과에는
+DB 저장 경로가 없으며 DB 트랜잭션을 타이머 콜백에서 변경하지 않는다.
+결과 DB 저장은 응답 수신·검증 뒤 수행하므로 타임아웃 콜백과 완료 저장을 경쟁시키지 않는다.
+기본 30000ms는 유지한다. AI 순차 모델당 120초 가정 시 ALL에 241000ms 이상이 필요하며
+실제 서버 실행 시간과 프록시 제한 확인 후 운영 설정을 정해야 한다.
+
+GET /api/analysis/:analysisId는 현재 브랜치에 없다. #89에서는 UUID 검증, 소유권 검사,
+미존재/만료 처리, DB 오류 COMMON500 변환, 오류 DTO/Swagger 및 조회 테스트가 필요하다.
+기존 findWithModelResults를 재사용할 수 있으며 현재 변경에 GET API는 포함하지 않는다.
+
+### PB-23 실제 PostgreSQL 검증 완료 (2026-10-19)
+
+별도 로컬 테스트 DB에서 기존 4개 및 PB-23 migration을 deploy하고 Prisma diff가 없음을 확인했다.
+단일/서로 다른 서버 프로세스의 동시 12요청 각각에서 분석 1행, 모델 결과 2행,
+AI 실행 1회, Usage 예약 호출 1회였다. 동일 키 재사용/충돌/실패/만료 A~G 검증도 통과했다.
+기존 DB에는 migration을 적용하지 않았고 #7 summary_jobs 테이블과 이력을 보존했다.
+실제 Usage 차감은 TODO이며 호출 횟수만 검증했다.
+
+준비된 격리 DB의 비공개 연결 상태 파일이 있으면 `node scripts/pb23/test.cjs`로
+DB suite까지 포함한 `npm test -- --runInBand`를 실행한다. 일반 npm test에서는 DB suite가 opt-in이다.
+자세한 비교표·SQL 근거·백업 위치는 `docs/PB-23-report.md`를 참조한다.
+
+## Issue #13 — POST /api/analysis — TEXT
+
+`Content-Type: application/json`으로 다음을 전송한다. IMAGE multipart 요청과 응답은 유지한다.
+임시 사용자 development-user는 그대로 사용하며 실제 인증은 이번 범위가 아니다.
+
+```json
+{ "type": "TEXT", "text": "  이 메시지가 의심스러워요.  " }
+```
+
+trim 후 문자열만 허용하며 Unicode 코드 포인트 기준 5~3,000자다.
+필드 누락/null/숫자/배열/객체/빈 문자열/공백/길이 초과는 COMMON400이며 DB에 저장하지 않는다.
+TEXT multipart와 TEXT의 Idempotency-Key도 COMMON400이다. IMAGE의 기존 멱등성 정책은 유지한다.
+키 없는 정상 TEXT 요청은 매번 별도 분석 요청을 생성한다.
+
+HTTP 202 응답 예시:
 
 ```json
 {
@@ -563,6 +634,16 @@ Body 없음. analysisId는 UUID. 현재 개발용 인증 생략 정책을 유지
     "summary": "AI 생성 여부는 판단하기 어렵습니다. 이미지 변조와 관련된 의심 신호가 감지되었습니다. 출처와 원본을 확인하는 것이 좋습니다.",
     "summaryModel": "configured-gemini-model",
     "summarizedAt": "2026-10-13T10:00:00.000Z"
+  "code": "ANALYSIS202",
+  "message": "분석 요청 생성에 성공했습니다.",
+  "result": {
+    "analysisId": "9dca5a1c-9736-43b1-9b7c-fad6b9ce7e72",
+    "type": "TEXT",
+    "status": "QUEUED",
+    "textPreview": "이 메시지가 의심스러워요.",
+    "createdAt": "2026-10-20T00:00:00.000Z",
+    "updatedAt": "2026-10-20T00:00:00.000Z",
+    "expiresAt": "2026-11-19T00:00:00.000Z"
   }
 }
 ```
@@ -798,3 +879,66 @@ Gemini summaryStatus(PENDING/COMPLETED/FAILED)는 요약 작업 상태다.
 `POST /api/analysis/image-uploads/{uploadId}/analyses`에 elementId 한 개를 전송한다.
 선택 전에는 AI 분석을 호출하지 않는다. GET 상세 응답에는 nullable `photoSelection`이 추가된다.
 요청·응답, 좌표 기준, 제한, migration 및 탐지 정확도 한계는 [사진 요소 선택 명세](../PHOTO-ELEMENT-SELECTION.md)를 따른다.
+기존 Prisma Analysis를 재사용하며 id는 Prisma UUID 기본값이다. createdAt/updatedAt을 같은 시각으로
+생성하고 expiresAt은 생성 시각 + 30×24시간으로 고정한다. IMAGE 보관 설정과 독립적이다.
+updatedAt은 Prisma @updatedAt으로 후속 Prisma 수정에 맞춰 갱신한다. 직접 SQL 갱신에는 이 기능이 적용되지 않는다.
+실제 AI API/Usage/백그라운드 작업은 호출하지 않는다. QUEUED는 요청 접수 상태이며 자동 실행 큐가 있다는 뜻이 아니다.
+점수·위험도·근거 등 임의 분석 결과를 만들거나 TEXT 응답에 넣지 않는다.
+DB 저장 오류는 원문/내부 오류를 포함하지 않는 COMMON500으로 반환한다.
+
+### 원문·이력·만료
+
+원문은 요청 메모리에서만 다룬다. DB/로그/큐/응답에 원문 필드를 저장하지 않는다.
+trim한 텍스트의 최초 200 코드 포인트를 textPreview에 저장하고, 유형을 구분한 SHA-256 requestHash를 저장한다.
+200자 이하인 입력은 미리보기 자체가 전체 내용과 같을 수 있으며 개인정보가 포함될 수 있다.
+사용자와 합의한 미리보기 보관 정책이며, 서비스 운영 전 동의 정책은 별도로 마련해야 한다.
+
+AnalysisRepository.findActiveTextForUser는 id + userId + type=TEXT + expiresAt > now를 모두 검사한다.
+정확히 만료 시각인 기록도 제외하며, 만료/다른 사용자/미존재는 조회 결과 null이다.
+향후 이력·상세 API는 이 필터를 적용하고 원문을 복원하거나 응답에 넣지 않아야 한다.
+이번에는 GET API와 실제 만료 데이터 삭제 작업을 추가하지 않는다.
+
+### Migration
+
+`20261020000000_text_analysis_input`은 nullable VARCHAR(200) textPreview와 updatedAt을 추가한다.
+기존 행의 updatedAt은 createdAt으로 채워 보존하며, 기존 키/상태/결과/제약을 변경하지 않는다.
+이후 updatedAt은 NOT NULL/DEFAULT CURRENT_TIMESTAMP로 설정한다.
+이번 작업에서는 migration 파일만 작성하고 DB에 적용하지 않았다. 새 코드 배포 전 적용이 필요하다.
+
+### #96 연동 지점
+
+`text-analysis.input.ts`의 normalizeTextInput을 공통 검증에 재사용한다.
+TextAnalysisInput은 `{ analysisId, userId, text }`, TextAnalysisProvider는
+`analyze(input, signal: AbortSignal): Promise<unknown>` 포트다. 결과 계약은 #96에서 확정해야 한다.
+현재 이 포트의 구현·등록·호출은 없다. #96은 AnalysisService.createText의 저장 이후 지점에서
+요청 메모리에 있는 정규화 원문을 넘기고, 승인된 결과 계약과 상태 전이·시간초과·Usage 정책을 추가해야 한다.
+
+현재 정책에서는 비동기 Worker가 DB에서 원문을 읽을 수 없다. #96이 실제 비동기 처리를 필요로 하면
+원문 보관 동의/암호화/보관 기간/삭제 정책이나 별도의 단기 전달 방식을 먼저 결정해야 한다.
+이력 미리보기를 AI 입력 원문으로 대체하면 안 된다.
+
+
+테스트 통합 브랜치는 #10의 dev 이미지 입력 검증도 반영한다. 스키마 호환성은 analysis-schema-audit.md를 참조한다.
+
+## 테스트 브랜치 #96 TEXT AI opt-in
+
+기본 TEXT_AI_PROVIDER=disabled에서는 기존 #13의 QUEUED/202와 입력 정책이 유지된다.
+TEXT_AI_PROVIDER=http일 때만 AI_SERVICE_BASE_URL의 배포 text-risk-1.0 API를 호출한다.
+TEXT_AI_SERVICE_TOKEN은 선택적인 별도 Bearer 토큰이며 미설정 시 AI_SERVICE_TOKEN을 사용한다.
+IMAGE의 AI_SERVER_BASE_URL/기존 CuRe·TruFor 계약은 변경하지 않는다.
+
+HTTP 모드의 TEXT 요청도 기존 POST application/json 및 HTTP 202를 유지한다.
+성공 응답의 result.textResult는 native riskScore(0..1/null), scoreScale, scoreMeaning,
+decision, IDs, 버전, quality, processingMs 메타데이터다.
+phishingScore/riskLevel을 만들어 채우거나 IMAGE 점수 컬럼을 사용하지 않는다.
+서버의 text echo/OCR 및 자유문구 evidence/limitations는 DB·공개 재응답에서 제외한다.
+근거의 공개·영구 저장은 마스킹 정책 합의가 남아 있다.
+
+HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사용, 처리 중/충돌/만료 409,
+실패는 기존 BE 오류를 재사용하며 자동 재시도는 없다.
+실제 서버 건강/계약 접속은 성공했지만 첫 분석 요청이 401이어서 성공 E2E는 아직 미검증이다.
+상세 차이·테스트 구분·실행 방법은 AI-TEXT-INTEGRATION-E2E.md를 따른다.
+
+## Issue #15 최신 POST 계약
+
+[POST TEXT/OCR 계약](../API-POST-TEXT-OCR.md)을 참고하세요. 과거 기록의 OCR 공개 경로 미연결 설명은 당시 시점 기준이며 현재는 명시적 sourceType 계약으로 연결합니다.

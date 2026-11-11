@@ -57,12 +57,16 @@ model Analysis {
   status            AnalysisStatus @default(QUEUED)
   photoSelection    Json?
   requestHash       String
+  idempotencyKey    String?        @db.VarChar(128)
   aiGenerationScore Float?
   aiRiskLevel       String?
   reasons           Json?
   modelVersion      String?
   errorCode         String?
   createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @default(now()) @updatedAt
+  textPreview       String?        @db.VarChar(200)
+  textResult        Json?
   completedAt       DateTime?
   expiresAt         DateTime
 
@@ -74,6 +78,7 @@ model Analysis {
   summaryModel      String?
   summarizedAt      DateTime?
 
+  @@unique([userId, idempotencyKey])
   @@map("analysis_requests")
 }
 

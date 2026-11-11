@@ -1,4 +1,5 @@
 import { AnalysisSummaryRepository } from '../src/domains/analysis/analysis-summary.repository';
+import { configureAnalysisSwagger } from '../src/domains/analysis/analysis.swagger';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -39,6 +40,7 @@ describe('IMAGE analysis API', () => {
           id: randomUUID(),
           userId,
           requestHash,
+          idempotencyKey: null,
           photoSelection: null,
           expiresAt,
           type: 'IMAGE',
@@ -54,10 +56,32 @@ describe('IMAGE analysis API', () => {
           summarizedAt: null,
           errorCode: null,
           createdAt: new Date(),
+          updatedAt: new Date(),
+          textPreview: null,
+          textResult: null,
           completedAt: null,
         };
         rows.set(row.id, row);
         return row;
+      },
+    ),
+    claim: jest.fn(
+      async (
+        userId: string,
+        requestHash: string,
+        expiresAt: Date,
+        idempotencyKey: string,
+      ): Promise<{ analysis: Analysis; claimed: boolean }> => {
+        const existing = [...rows.values()].find(
+          (row) =>
+            row.userId === userId && row.idempotencyKey === idempotencyKey,
+        );
+        if (existing) return { analysis: existing, claimed: false };
+        const pending = repository.create(userId, requestHash, expiresAt);
+        // In-memory unique insert emulates the DB claim before yielding.
+        const row = [...rows.values()].at(-1)!;
+        row.idempotencyKey = idempotencyKey;
+        return { analysis: await pending, claimed: true };
       },
     ),
     analyzing: jest.fn(async (id: string) =>
@@ -104,6 +128,7 @@ describe('IMAGE analysis API', () => {
           ({
             JWT_ACCESS_SECRET: secret,
             AI_REQUEST_TIMEOUT_MS: '100',
+            NODE_ENV: 'development',
             ANALYSIS_MAX_FILE_BYTES: '1024',
             ANALYSIS_RETENTION_SECONDS: '86400',
           })[key],
@@ -163,18 +188,15 @@ describe('IMAGE analysis API', () => {
       ),
     ).toBe(true);
   });
-  it.each(['TEXT', 'URL', 'SCREEN', 'VIDEO', 'invalid'])(
-    'rejects %s',
-    async (type) => {
-      const response = await post()
-        .field('type', type)
-        .attach('file', png(), 'sample.png')
-        .expect(400);
-      expect(response.body.code).toBe('COMMON400');
-      expect(response.body.message).toContain('현재 IMAGE 분석만 지원');
-      expect(repository.create).not.toHaveBeenCalled();
-    },
-  );
+  it.each(['URL', 'SCREEN', 'VIDEO', 'invalid'])('rejects %s', async (type) => {
+    const response = await post()
+      .field('type', type)
+      .attach('file', png(), 'sample.png')
+      .expect(400);
+    expect(response.body.code).toBe('COMMON400');
+    expect(response.body.message).toContain('현재 IMAGE/TEXT 분석만 지원');
+    expect(repository.create).not.toHaveBeenCalled();
+  });
   it('rejects missing type', async () => {
     await post().attach('file', png(), 'sample.png').expect(400);
   });
@@ -293,7 +315,7 @@ describe('IMAGE analysis API', () => {
     expect(rows.size).toBe(2);
     expect(usage.reserveAiUsage).toHaveBeenCalledTimes(2);
   });
-  it('ignores an old key header when submitting different images', async () => {
+  it('rejects reuse of a key for different images', async () => {
     await post()
       .set('Idempotency-Key', '1')
       .field('type', 'IMAGE')
@@ -303,8 +325,67 @@ describe('IMAGE analysis API', () => {
       .set('Idempotency-Key', '1')
       .field('type', 'IMAGE')
       .attach('file', Buffer.concat([png(), Buffer.from([2])]), 'sample.png')
-      .expect(202);
+      .expect(409);
+    expect(rows.size).toBe(1);
+  });
+  const keyedUpload = (key: string) =>
+    post()
+      .set('Idempotency-Key', key)
+      .field('type', 'IMAGE')
+      .attach('file', png(), 'sample.png');
+  it('reuses a completed response without duplicate AI or usage', async () => {
+    const first = await keyedUpload('repeat').expect(202);
+    const second = await keyedUpload('repeat').expect(202);
+    expect(second.body).toEqual(first.body);
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
+    expect(usage.reserveAiUsage).toHaveBeenCalledTimes(1);
+  });
+  it('allows identical images under different keys', async () => {
+    await keyedUpload('one').expect(202);
+    await keyedUpload('two').expect(202);
+    expect(provider.analyze).toHaveBeenCalledTimes(2);
     expect(rows.size).toBe(2);
+  });
+  it('returns 409 for concurrent in-progress duplicate without executing twice', async () => {
+    let finish!: (value: unknown) => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    provider.analyze.mockImplementationOnce(() => {
+      entered();
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    });
+    const first = keyedUpload('concurrent').then((response) => response);
+    await started;
+    await keyedUpload('concurrent').expect(409);
+    finish({
+      aiGenerationScore: 50,
+      aiRiskLevel: 'CAUTION',
+      reasons: [],
+      modelVersion: 'test',
+    });
+    expect((await first).status).toBe(202);
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
+    expect(usage.reserveAiUsage).toHaveBeenCalledTimes(1);
+    expect(rows.size).toBe(1);
+  });
+  it('replays failed requests without retrying AI or usage', async () => {
+    provider.analyze.mockRejectedValueOnce(new Error('failure'));
+    await keyedUpload('failed').expect(503);
+    await keyedUpload('failed').expect(503);
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
+    expect(usage.reserveAiUsage).toHaveBeenCalledTimes(1);
+    expect(usage.releaseAiUsage).toHaveBeenCalledTimes(1);
+  });
+  it('rejects expired keys and invalid keys', async () => {
+    await keyedUpload('expired').expect(202);
+    [...rows.values()][0].expiresAt = new Date(0);
+    await keyedUpload('expired').expect(409);
+    await keyedUpload('contains space').expect(400);
+    expect(provider.analyze).toHaveBeenCalledTimes(1);
   });
   it('persists Provider failure and allows a fresh retry', async () => {
     provider.analyze.mockRejectedValueOnce(new Error('Provider unavailable'));
@@ -333,7 +414,38 @@ describe('IMAGE analysis API', () => {
   it('releases a reservation even when failure persistence also fails', async () => {
     provider.analyze.mockRejectedValueOnce(new Error('Provider unavailable'));
     repository.fail.mockRejectedValueOnce(new Error('Database unavailable'));
-    await upload().expect(500);
+    await upload().expect(503);
+    expect(usage.releaseAiUsage).toHaveBeenCalledTimes(1);
+  });
+  it('preserves the original error when usage release fails', async () => {
+    provider.analyze.mockRejectedValueOnce(new Error('private upstream trace'));
+    usage.releaseAiUsage.mockRejectedValueOnce(
+      new Error('private usage trace'),
+    );
+    const response = await upload().expect(503);
+    expect(response.body.code).toBe('ANALYSIS503');
+    expect(JSON.stringify(response.body)).not.toContain('private');
+    expect([...rows.values()][0].status).toBe('FAILED');
+  });
+  it('ignores a provider response arriving after timeout', async () => {
+    let resolve!: (value: unknown) => void;
+    provider.analyze.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    await upload().expect(503);
+    resolve({
+      aiGenerationScore: 50,
+      aiRiskLevel: 'CAUTION',
+      reasons: [],
+      modelVersion: 'late',
+    });
+    await new Promise<void>((done) => setImmediate(done));
+    expect([...rows.values()][0].status).toBe('FAILED');
+    expect(repository.complete).not.toHaveBeenCalled();
+    expect(repository.completeV1).not.toHaveBeenCalled();
     expect(usage.releaseAiUsage).toHaveBeenCalledTimes(1);
   });
   it('handles Usage quota exceeded', async () => {
@@ -508,22 +620,54 @@ describe('IMAGE analysis API', () => {
       .get('/api/health')
       .expect(200, { status: 'ok' });
   });
-  it('documents unauthenticated multipart requests and all responses', () => {
-    const doc = SwaggerModule.createDocument(
-      app,
-      new DocumentBuilder().addBearerAuth().build(),
+  it('documents bearer policy and multipart requests with all responses', () => {
+    const doc = configureAnalysisSwagger(
+      SwaggerModule.createDocument(
+        app,
+        new DocumentBuilder().addBearerAuth().build(),
+      ),
     );
     const operation = doc.paths['/api/analysis'].post!;
-    expect(operation.security ?? []).toEqual([]);
+    expect(operation.security).toEqual([{ bearer: [] }]);
     expect(operation.requestBody).toMatchObject({
       content: {
-        'multipart/form-data': { schema: { required: ['type', 'file'] } },
+        'multipart/form-data': {
+          schema: {
+            type: 'object',
+            required: ['type', 'file'],
+            properties: { file: { type: 'string', format: 'binary' } },
+          },
+        },
+        'application/json': {
+          schema: {
+            type: 'object',
+            required: ['type', 'text'],
+          },
+        },
       },
     });
-    expect(operation.parameters ?? []).not.toEqual(
+    expect(operation.parameters ?? []).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: 'Idempotency-Key' }),
       ]),
+    );
+    expect(operation.parameters).toEqual([
+      expect.objectContaining({
+        name: 'Idempotency-Key',
+        in: 'header',
+        required: false,
+      }),
+    ]);
+    const body =
+      operation.requestBody as import('@nestjs/swagger').RequestBodyObject;
+    expect(body.content['multipart/form-data'].schema).not.toHaveProperty(
+      'oneOf',
+    );
+    expect(body.content['multipart/form-data'].schema).not.toHaveProperty(
+      'properties.text',
+    );
+    expect(body.content['application/json'].schema).not.toHaveProperty(
+      'properties.file',
     );
     expect(Object.keys(operation.responses)).toEqual(
       expect.arrayContaining(['202', '400', '413', '429', '415', '503', '500']),

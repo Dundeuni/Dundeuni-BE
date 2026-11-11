@@ -1,0 +1,32 @@
+import { randomUUID } from 'node:crypto';
+export const textWire = (
+  analysisId: string,
+  elementId: string,
+  sourceType: 'TEXT' | 'IMAGE' | 'SCREEN_CROP' = 'TEXT',
+) => ({
+  contractVersion: 'text-risk-1.0',
+  requestId: randomUUID(),
+  analysisId,
+  elementId,
+  sourceType,
+  status: 'COMPLETED',
+  decision: 'phishing',
+  riskScore: 0.82,
+  scoreScale: '0..1',
+  scoreMeaning: 'UNCALIBRATED_CLASSIFIER_SCORE',
+  modelName: 'ax',
+  modelVersion: 'fixture-v1',
+  policyVersion: 'fixture-policy',
+  text: 'private original echo',
+  quality: {
+    needsReview: false,
+    reasonCodes: [],
+    ocrUsed: sourceType !== 'TEXT',
+    poorOcrConfidence: false,
+    layoutUncertain: false,
+    contextDisagreement: false,
+  },
+  evidence: ['private original evidence'],
+  limitations: ['private original limitation'],
+  processingMs: 12,
+});

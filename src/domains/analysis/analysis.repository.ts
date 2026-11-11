@@ -13,10 +13,51 @@ import {
 } from './image-analysis-v1.dto';
 import { ImageAnalysisResult } from './image-analysis.service';
 import { PhotoSelectionMetadata } from './photo-selection.dto';
+import { TEXT_RETENTION_MS } from './text-analysis.input';
+import { StoredTextRiskResult } from './text-risk.dto';
 
 @Injectable()
 export class AnalysisRepository {
   constructor(private readonly prisma: PrismaService) {}
+  createText(
+    userId: string,
+    requestHash: string,
+    textPreview: string,
+    sourceType?: 'SCREEN_CROP',
+  ) {
+    const createdAt = new Date();
+    return this.prisma.analysis.create({
+      data: {
+        userId,
+        requestHash,
+        textPreview,
+        ...(sourceType === 'SCREEN_CROP'
+          ? { textResult: { sourceType: 'SCREEN_CROP' } }
+          : {}),
+        type: AnalysisType.TEXT,
+        status: 'QUEUED',
+        createdAt,
+        updatedAt: createdAt,
+        expiresAt: new Date(createdAt.getTime() + TEXT_RETENTION_MS),
+      },
+    });
+  }
+
+  /** History foundation: expired/other-user records are indistinguishable from missing. */
+  findActiveTextForUser(id: string, userId: string, now = new Date()) {
+    return this.prisma.analysis.findFirst({
+      where: { id, userId, type: AnalysisType.TEXT, expiresAt: { gt: now } },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        textPreview: true,
+        createdAt: true,
+        updatedAt: true,
+        expiresAt: true,
+      },
+    });
+  }
   create(
     userId: string,
     requestHash: string,
@@ -38,6 +79,60 @@ export class AnalysisRepository {
       },
     });
   }
+  /** The unique insert is the execution claim; losers never reserve usage or call AI. */
+  async claim(
+    userId: string,
+    requestHash: string,
+    expiresAt: Date,
+    idempotencyKey: string,
+    text?: { textPreview: string; createdAt: Date; sourceType?: 'SCREEN_CROP' },
+  ) {
+    try {
+      const analysis = await this.prisma.analysis.create({
+        data: {
+          userId,
+          requestHash,
+          expiresAt,
+          idempotencyKey,
+          type: text ? AnalysisType.TEXT : AnalysisType.IMAGE,
+          ...(text
+            ? {
+                textPreview: text.textPreview,
+                ...(text.sourceType === 'SCREEN_CROP'
+                  ? { textResult: { sourceType: 'SCREEN_CROP' } }
+                  : {}),
+                createdAt: text.createdAt,
+                updatedAt: text.createdAt,
+              }
+            : {}),
+        },
+      });
+      return { analysis, claimed: true };
+    } catch (error) {
+      if (
+        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+        error.code !== 'P2002'
+      )
+        throw error;
+      const analysis = await this.prisma.analysis.findUnique({
+        where: { userId_idempotencyKey: { userId, idempotencyKey } },
+      });
+      if (!analysis) throw error;
+      return { analysis, claimed: false };
+    }
+  }
+  completeText(id: string, result: StoredTextRiskResult) {
+    return this.prisma.analysis.update({
+      where: { id, type: AnalysisType.TEXT, status: 'ANALYZING' },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+        errorCode: null,
+        textResult: result as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
   analyzing(id: string) {
     return this.prisma.analysis.update({
       where: { id },

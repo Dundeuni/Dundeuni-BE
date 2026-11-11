@@ -63,7 +63,14 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     );
   }
   beforeAll(async () => {
-    connection = new URL(parse(readFileSync('.env')).DATABASE_URL);
+    connection = new URL(
+      process.env.PB23_DB_URL ?? parse(readFileSync('.env')).DATABASE_URL,
+    );
+    if (
+      process.env.PB23_DB_URL &&
+      !/^pb23_test_\d+$/.test(connection.pathname.slice(1))
+    )
+      throw new Error('PB23 isolated database required');
     if (!['localhost', '127.0.0.1'].includes(connection.hostname))
       throw new Error('Local test database required');
     const migrations = readdirSync('prisma/migrations')
@@ -85,6 +92,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       .overrideProvider(ConfigService)
       .useValue(
         new ConfigService({
+          NODE_ENV: 'development',
           ANALYSIS_MAX_FILE_BYTES: '1024',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '100',
@@ -238,6 +246,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     'TIMEOUT',
   ] as const)('runs real service→Mock→Prisma flow for %s', async (scenario) => {
     const config = new ConfigService({
+      NODE_ENV: 'development',
       ANALYSIS_MAX_FILE_BYTES: '128',
       ANALYSIS_RETENTION_SECONDS: '86400',
       AI_REQUEST_TIMEOUT_MS: '30',
