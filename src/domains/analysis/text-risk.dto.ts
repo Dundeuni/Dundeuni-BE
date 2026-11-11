@@ -28,8 +28,8 @@ export interface TextRiskResultDto {
   limitations: string[];
   processingMs: number;
 }
-/** Preserve validated evidence for results and history; omit echoed text/OCR and limitations. */
-export type StoredTextRiskResult = Omit<TextRiskResultDto, 'limitations'>;
+/** Preserve validated evidence and limitations for results/history; omit echoed text/OCR. */
+export type StoredTextRiskResult = TextRiskResultDto;
 
 export function validateTextRiskResponse(
   value: unknown,
@@ -146,6 +146,7 @@ export function storedTextRiskResult(
     policyVersion: result.policyVersion,
     quality: result.quality,
     evidence: [...result.evidence],
+    limitations: [...result.limitations],
     processingMs: result.processingMs,
   };
 }

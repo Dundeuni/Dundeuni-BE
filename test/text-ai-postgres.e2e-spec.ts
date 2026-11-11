@@ -167,14 +167,17 @@ dbDescribe(
         30 * 86400000,
       );
       expect(JSON.stringify(row)).not.toMatch(
-        /never-persist-tail|private original echo|private original limitation/,
+        /never-persist-tail|private original echo/,
       );
       expect(JSON.stringify(response.body)).not.toMatch(
-        /private original echo|private original limitation/,
+        /private original echo/,
       );
       expect(row.textResult).not.toHaveProperty('text');
       expect(row.textResult).toHaveProperty('evidence', [
         'private original evidence',
+      ]);
+      expect(row.textResult).toHaveProperty('limitations', [
+        'private original limitation',
       ]);
       expect(row.textResult).not.toHaveProperty('phishingScore');
       expect(row.textResult).not.toHaveProperty('riskLevel');

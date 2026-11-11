@@ -931,8 +931,8 @@ HTTP 모드의 TEXT 요청도 기존 POST application/json 및 HTTP 202를 유�
 성공 응답의 result.textResult는 native riskScore(0..1/null), scoreScale, scoreMeaning,
 decision, IDs, 버전, quality, processingMs 메타데이터다.
 phishingScore/riskLevel을 만들어 채우거나 IMAGE 점수 컬럼을 사용하지 않는다.
-서버의 text echo/OCR 및 limitations는 DB·공개 재응답에서 제외한다.
-시연 통합 브랜치는 검증된 evidence 배열을 textResult.evidence로 저장하고 POST·상세 조회·멱등성 재응답에 포함한다. 기존 기록의 누락 값은 복원하지 않으며 FE는 evidence ?? []로 처리한다.
+서버의 text echo/OCR은 DB·공개 재응답에서 제외한다.
+시연 통합 브랜치는 검증된 evidence·limitations 배열을 textResult.evidence 및 textResult.limitations로 저장하고 POST·상세 조회·멱등성 재응답에 포함한다. 기존 기록의 누락 값은 복원하지 않으며 FE는 evidence ?? [] 및 limitations ?? []로 처리한다.
 
 HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사용, 처리 중/충돌/만료 409,
 실패는 기존 BE 오류를 재사용하며 자동 재시도는 없다.

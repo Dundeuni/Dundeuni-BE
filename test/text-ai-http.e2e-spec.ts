@@ -53,6 +53,8 @@ describe('deployed TEXT/OCR HTTP contract with mocked transport', () => {
     expect(stored).not.toHaveProperty('text');
     expect(stored.evidence).toEqual(dto.evidence);
     expect(stored.evidence).not.toBe(dto.evidence);
+    expect(stored.limitations).toEqual(dto.limitations);
+    expect(stored.limitations).not.toBe(dto.limitations);
   });
   it('sends OCR multipart with no models/deadlineAt/schemaVersion or original filename', async () => {
     const ctx = input();

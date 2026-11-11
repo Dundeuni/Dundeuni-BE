@@ -14,7 +14,7 @@ SCREEN_CROP에 text만 전달하거나 file을 누락하면 400. DIRECT에 file,
 
 TEXT AI는 TEXT_AI_PROVIDER=http일 때 활성화되며 AI_SERVICE_BASE_URL을 사용한다. IMAGE는 AI_PROVIDER=http과 AI_SERVER_BASE_URL을 사용한다. 토큰·환경파일을 Git에 포함하지 않는다. JSON의 AI 요청은 text/analysisId/elementId, OCR의 AI 요청은 file/analysisId/elementId/sourceType=SCREEN_CROP이다. OCR 서버가 피싱 결과를 함께 반환하므로 BE에서 문자열 API를 중복 호출하지 않는다.
 
-TEXT와 캡처는 Analysis.type=TEXT로 저장하고 완료 응답 메타데이터를 textResult에 저장한다. 검증된 evidence 배열은 textResult.evidence로 저장·응답한다. 원본 TEXT·OCR echo·limitations·이미지는 새로 저장하지 않는다. 직접 입력은 기존 200자 preview 정책을 유지하고 캡처 preview는 빈 문자열이다. 30일 만료 및 원본 버퍼 정리를 유지한다. 캡처 생성 시 textResult={sourceType:SCREEN_CROP} 메타데이터만 먼저 저장하여 QUEUED/ANALYZING/FAILED 상태도 입력 출처를 보존한다. 완료 시 검증된 결과로 교체하며 schema/migration 변경은 없다. 이 메타데이터는 AI 분석 결과를 의미하지 않는다.
+TEXT와 캡처는 Analysis.type=TEXT로 저장하고 완료 응답 메타데이터를 textResult에 저장한다. 검증된 evidence·limitations 배열은 textResult에 저장·응답한다. 원본 TEXT·OCR echo·이미지는 새로 저장하지 않는다. 직접 입력은 기존 200자 preview 정책을 유지하고 캡처 preview는 빈 문자열이다. 30일 만료 및 원본 버퍼 정리를 유지한다. 캡처 생성 시 textResult={sourceType:SCREEN_CROP} 메타데이터만 먼저 저장하여 QUEUED/ANALYZING/FAILED 상태도 입력 출처를 보존한다. 완료 시 검증된 결과로 교체하며 schema/migration 변경은 없다. 이 메타데이터는 AI 분석 결과를 의미하지 않는다.
 
 인증은 #15에 공통 RequestUserGuard를 배치한다. 명시적인 development에서만 development-user를 사용하고 토큰이 있어도 같은 사용자로 처리한다. production 및 그 외 환경은 기존 HS256 JWT Guard의 sub를 사용한다. 프로세스 NODE_ENV=production이면 ConfigService가 development여도 우회하지 않는다. #17 GET은 같은 Guard를 재사용한다.
 
@@ -50,3 +50,7 @@ startedAt(UTC), upstreamHost, upstreamPath를 포함한다. 성공 로그에는 
 GET /api/analysis/{analysisId}, GET /api/history/{analysisId}에서도 조회할 수 있다.
 근거가 없으면 빈 배열이며 근거를 추가 생성하지 않는다. 기존 기록에 누락된 evidence는
 소급 복원하지 않으므로 FE는 `textResult.evidence ?? []`로 처리한다. DB migration은 없다.
+
+`limitations`도 `result.textResult.limitations`에 AI가 제공한 문자열 배열 그대로 포함하며
+저장·상세 조회·멱등성 재응답에서 보존한다. 기존 기록은 `limitations ?? []`로 처리한다.
+빈 배열은 추가 제공된 주의사항이 없다는 의미이며 분석 한계가 없다는 뜻은 아니다.
