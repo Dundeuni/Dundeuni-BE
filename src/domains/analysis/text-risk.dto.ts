@@ -28,11 +28,8 @@ export interface TextRiskResultDto {
   limitations: string[];
   processingMs: number;
 }
-/** No echoed text, OCR, or free-form evidence/limitations in persistent/public replay data. */
-export type StoredTextRiskResult = Omit<
-  TextRiskResultDto,
-  'evidence' | 'limitations'
->;
+/** Preserve validated evidence for results and history; omit echoed text/OCR and limitations. */
+export type StoredTextRiskResult = Omit<TextRiskResultDto, 'limitations'>;
 
 export function validateTextRiskResponse(
   value: unknown,
@@ -148,6 +145,7 @@ export function storedTextRiskResult(
     modelVersion: result.modelVersion,
     policyVersion: result.policyVersion,
     quality: result.quality,
+    evidence: [...result.evidence],
     processingMs: result.processingMs,
   };
 }

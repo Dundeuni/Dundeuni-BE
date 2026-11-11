@@ -49,9 +49,10 @@ describe('deployed TEXT/OCR HTTP contract with mocked transport', () => {
     expect(dto).not.toHaveProperty('phishingScore');
     expect(dto).not.toHaveProperty('riskLevel');
     const stored = storedTextRiskResult(dto);
-    expect(JSON.stringify(stored)).not.toContain('private original');
+    expect(JSON.stringify(stored)).not.toContain('private original echo');
     expect(stored).not.toHaveProperty('text');
-    expect(stored).not.toHaveProperty('evidence');
+    expect(stored.evidence).toEqual(dto.evidence);
+    expect(stored.evidence).not.toBe(dto.evidence);
   });
   it('sends OCR multipart with no models/deadlineAt/schemaVersion or original filename', async () => {
     const ctx = input();

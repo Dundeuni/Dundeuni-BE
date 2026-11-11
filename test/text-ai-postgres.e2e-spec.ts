@@ -111,7 +111,7 @@ dbDescribe(
         textResult: { sourceType: 'SCREEN_CROP', riskScore: 0.82 },
       });
       expect(row.modelResults).toEqual([]);
-      expect(JSON.stringify(row)).not.toContain('private original');
+      expect(JSON.stringify(row)).not.toContain('private original echo');
       expect(image.analyze).not.toHaveBeenCalled();
     });
     it('preserves failed SCREEN_CROP source in real PostgreSQL', async () => {
@@ -167,11 +167,15 @@ dbDescribe(
         30 * 86400000,
       );
       expect(JSON.stringify(row)).not.toMatch(
-        /never-persist-tail|private original/,
+        /never-persist-tail|private original echo|private original limitation/,
       );
-      expect(JSON.stringify(response.body)).not.toMatch(/private original/);
+      expect(JSON.stringify(response.body)).not.toMatch(
+        /private original echo|private original limitation/,
+      );
       expect(row.textResult).not.toHaveProperty('text');
-      expect(row.textResult).not.toHaveProperty('evidence');
+      expect(row.textResult).toHaveProperty('evidence', [
+        'private original evidence',
+      ]);
       expect(row.textResult).not.toHaveProperty('phishingScore');
       expect(row.textResult).not.toHaveProperty('riskLevel');
       expect(usage.reserveAiUsage).not.toHaveBeenCalled();

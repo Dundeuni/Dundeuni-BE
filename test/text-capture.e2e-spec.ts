@@ -164,6 +164,9 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
       'http://127.0.0.1:9/internal/v1/text-analyses',
     );
     expect(response.body.result.textResult.sourceType).toBe('TEXT');
+    expect(response.body.result.textResult.evidence).toEqual([
+      'private original evidence',
+    ]);
     expect(imageProvider.analyze).not.toHaveBeenCalled();
   });
   it('routes explicit SCREEN_CROP through OCR and stores only metadata', async () => {
@@ -189,13 +192,24 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
       textPreview: '',
       textResult: { sourceType: 'SCREEN_CROP', quality: { ocrUsed: true } },
     });
+    const detail = await request(app.getHttpServer())
+      .get(`/api/history/${response.body.result.analysisId}`)
+      .expect(200);
+    expect(detail.body.result.textResult.evidence).toEqual([
+      'private original evidence',
+    ]);
     const stored = rows.get(response.body.result.analysisId)!;
     expect(stored.expiresAt.getTime() - stored.createdAt.getTime()).toBe(
       30 * 86400000,
     );
-    expect(JSON.stringify(stored)).not.toContain('private original');
+    expect(JSON.stringify(stored)).not.toContain('private original echo');
     expect(stored.textResult).not.toHaveProperty('text');
-    expect(stored.textResult).not.toHaveProperty('evidence');
+    expect(stored.textResult).toHaveProperty('evidence', [
+      'private original evidence',
+    ]);
+    expect(response.body.result.textResult.evidence).toEqual([
+      'private original evidence',
+    ]);
     expect(imageProvider.analyze).not.toHaveBeenCalled();
     expect(
       capture.mock.calls[0][1].buffer.every((byte: number) => byte === 0),
@@ -205,6 +219,9 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
     const first = await upload('capture-1').expect(202);
     const second = await upload('capture-1').expect(202);
     expect(second.body).toEqual(first.body);
+    expect(second.body.result.textResult.evidence).toEqual([
+      'private original evidence',
+    ]);
     expect(transport).toHaveBeenCalledTimes(1);
     const other = await sharp({
       create: { width: 4, height: 4, channels: 3, background: 'black' },
