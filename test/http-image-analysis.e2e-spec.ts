@@ -184,9 +184,10 @@ describe('v0.2 real HTTP transport with mocked HTTP', () => {
       );
     }
   });
-  it.each([false, true])(
+  it.each(['below', 'equal', 'above'] as const)(
     'applies PROBE and FUSED boundaries (at threshold: %s)',
-    async (atThreshold) => {
+    async (boundary) => {
+      const atThreshold = boundary !== 'below';
       const file = makeFile();
       const ctx = context(file);
       const wire = await new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(
@@ -202,14 +203,29 @@ describe('v0.2 real HTTP transport with mocked HTTP', () => {
       Object.assign(wire.generation!, {
         modelName: 'CuRe',
         modelVersion: 'CuRe-probe-pe-core-l14-336-test',
-        rawScore: { score: atThreshold ? 0.5 : 0.499999 },
+        rawScore: {
+          score:
+            boundary === 'below'
+              ? 0.5 - Number.EPSILON
+              : boundary === 'above'
+                ? 0.5 + Number.EPSILON
+                : 0.5,
+        },
         displayScore: 50,
         decision: generationDecision,
       });
       Object.assign(wire.manipulation!, {
         modelName: 'FUSED',
         modelVersion: 'FUSED-20-80-test',
-        rawScore: { score: atThreshold ? 0.19978919508866966 : 0.199789 },
+        rawScore: {
+          score:
+            0.19978919508866966 +
+            (boundary === 'below'
+              ? -Number.EPSILON
+              : boundary === 'above'
+                ? Number.EPSILON
+                : 0),
+        },
         displayScore: 20,
         decision: manipulationDecision,
       });

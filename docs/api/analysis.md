@@ -543,3 +543,6 @@ BE와 Studio는 시작 시의 환경변수가 `.env`보다 우선하므로 같�
 Railway 검증에는 공개 BE URL, 프로젝트/서비스/환경, 접근 권한, 배포된 commit/HTTP Adapter 여부,
 AI 환경변수와 프록시 timeout 설정, 승인된 테스트 이미지가 필요하다.
 Railway 주소·권한을 받기 전에는 로컬 검증을 Railway 검증으로 보고하지 않는다.
+
+### PROBE·FUSED 검증 범위
+PROBE CuRe 0.5, FUSED 0.19978919508866966를 원점수로 비교하며 바로 아래·동일·바로 위 경계를 검증한다. HTTP Mock→Prisma 저장에서 모델 이름·버전을 보존한다. 2026-11-18 실서버 이미지·OCR POST는 ngrok ERR_NGROK_3200/404로 실패해 실제 모델 응답은 미검증이다.

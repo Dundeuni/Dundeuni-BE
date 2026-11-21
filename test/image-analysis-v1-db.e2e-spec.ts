@@ -63,7 +63,9 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     );
   }
   beforeAll(async () => {
-    connection = new URL(parse(readFileSync('.env')).DATABASE_URL);
+    connection = new URL(
+      process.env.V1_DB_URL ?? parse(readFileSync('.env')).DATABASE_URL,
+    );
     if (!['localhost', '127.0.0.1'].includes(connection.hostname))
       throw new Error('Local test database required');
     const migrations = readdirSync('prisma/migrations')
@@ -104,6 +106,73 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     );
     await app.init();
     await app.listen(0, '127.0.0.1');
+  });
+  it('preserves PROBE CuRe and FUSED names and versions after HTTP response validation and DB storage', async () => {
+    const row = await repository.create(
+      'model-owner',
+      'model-names',
+      new Date(Date.now() + 60000),
+    );
+    const file = {
+      buffer: PNG.sync.write(new PNG({ width: 4, height: 4 })),
+      mimetype: 'image/png',
+    } as Express.Multer.File;
+    const context = {
+      file,
+      analysisId: row.id,
+      elementId: randomUUID(),
+      requestId: randomUUID(),
+      sourceType: 'IMAGE' as const,
+      models: 'ALL' as const,
+      deadlineAt: new Date(Date.now() + 5000).toISOString(),
+    };
+    const wire = await new MockImageAnalysisProvider('BOTH_SUCCESS').analyze(
+      file,
+      context,
+    );
+    Object.assign(wire.generation!, {
+      modelName: 'CuRe',
+      modelVersion: 'CuRe-probe-pe-core-l14-336-review',
+      rawScore: { score: 0.8 },
+    });
+    Object.assign(wire.manipulation!, {
+      modelName: 'FUSED',
+      modelVersion: 'FUSED-20-80-review',
+      rawScore: { score: 0.8 },
+    });
+    const { HttpImageAnalysisProvider } =
+      await import('../src/domains/analysis/http-image-analysis.provider');
+    const transport = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(Response.json(wire));
+    try {
+      const config = new ConfigService({
+        AI_SERVER_BASE_URL: 'http://127.0.0.1:9',
+        AI_SERVICE_TOKEN: 'test-token',
+        AI_REQUEST_TIMEOUT_MS: '1000',
+      });
+      const result = await new ImageAnalysisService(
+        new HttpImageAnalysisProvider(config),
+        config,
+      ).analyze(file, context);
+      if (!('format' in result)) throw Error('Expected models');
+      await repository.completeV1(row.id, result.models, result.completedAt);
+      const saved = await repository.findWithModelResults(row.id);
+      expect(
+        saved!.modelResults.find((m) => m.kind === 'GENERATION'),
+      ).toMatchObject({
+        modelName: 'CuRe',
+        modelVersion: 'CuRe-probe-pe-core-l14-336-review',
+      });
+      expect(
+        saved!.modelResults.find((m) => m.kind === 'MANIPULATION'),
+      ).toMatchObject({
+        modelName: 'FUSED',
+        modelVersion: 'FUSED-20-80-review',
+      });
+    } finally {
+      transport.mockRestore();
+    }
   });
   afterAll(async () => {
     if (app) await app.close();
