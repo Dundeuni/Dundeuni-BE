@@ -172,7 +172,7 @@ export class ImageAnalysisService {
     if (!model) return null;
     return {
       status: model.status,
-      modelName: name,
+      modelName: model.modelName ?? name,
       modelVersion: model.modelVersion,
       policyVersion: model.policyVersion,
       displayScore: model.displayScore,

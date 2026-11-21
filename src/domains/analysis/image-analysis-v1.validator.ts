@@ -203,12 +203,16 @@ export function validateAiImageResponseV02(
     if (
       !['SUCCEEDED', 'FAILED'].includes(String(item.status)) ||
       (item.modelName !== undefined &&
-        item.modelName !== (kind === 'generation' ? 'CuRe' : 'TruFor')) ||
+        (kind === 'generation'
+          ? item.modelName !== 'CuRe'
+          : item.modelName !== 'TruFor' && item.modelName !== 'FUSED')) ||
       'map' in item ||
       'conf' in item ||
       'imgsize' in item ||
       typeof item.modelVersion !== 'string' ||
       !item.modelVersion.trim() ||
+      (item.modelName === 'FUSED' &&
+        !item.modelVersion.startsWith('FUSED-20-80-')) ||
       typeof item.policyVersion !== 'string' ||
       !item.policyVersion.trim() ||
       !Array.isArray(item.reasons) ||
@@ -243,7 +247,12 @@ export function validateAiImageResponseV02(
         typeof item.rawScore.score !== 'number'
       )
         throw new Error('Invalid raw score object');
-      const decision = pilotDecision(kind, item.rawScore.score);
+      const decision = pilotDecision(
+        kind,
+        item.rawScore.score,
+        item.modelName,
+        item.modelVersion,
+      );
       if (
         item.decision !== decision ||
         item.displayScore !==
