@@ -1,3 +1,4 @@
+import { configureAnalysisSwagger } from '../src/domains/analysis/analysis.swagger';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -42,6 +43,7 @@ dbDescribe('#13 actual PostgreSQL verification (isolated test DB only)', () => {
       .overrideProvider(ConfigService)
       .useValue(
         new ConfigService({
+          NODE_ENV: 'development',
           ANALYSIS_MAX_FILE_BYTES: '100000',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '100',
@@ -210,20 +212,30 @@ dbDescribe('#13 actual PostgreSQL verification (isolated test DB only)', () => {
       expect(await prisma.analysis.count()).toBe(before);
     },
   );
-  it('reproduces shared Swagger schema exposure under both Content-Types', () => {
-    const doc = SwaggerModule.createDocument(
-      app,
-      new DocumentBuilder().build(),
+  it('documents distinct JSON and multipart contracts after the Swagger fix', () => {
+    const doc = configureAnalysisSwagger(
+      SwaggerModule.createDocument(app, new DocumentBuilder().build()),
     );
-    const body = doc.paths['/api/analysis'].post!.requestBody as any;
-    const json = body.content['application/json'].schema,
-      multipart = body.content['multipart/form-data'].schema;
-    expect(json).toEqual(multipart);
-    expect(
-      json.oneOf.some((s: any) => s.properties.type.enum.includes('IMAGE')),
-    ).toBe(true);
-    expect(
-      multipart.oneOf.some((s: any) => s.properties.type.enum.includes('TEXT')),
-    ).toBe(true);
+    const body = doc.paths['/api/analysis'].post!
+      .requestBody as import('@nestjs/swagger').RequestBodyObject;
+    expect(body.content['application/json'].schema).toMatchObject({
+      required: ['type', 'text'],
+      properties: {
+        type: { enum: ['TEXT'] },
+        sourceType: { enum: ['DIRECT'] },
+        text: { minLength: 5, maxLength: 3000 },
+      },
+    });
+    expect(body.content['multipart/form-data'].schema).toMatchObject({
+      required: ['type', 'file'],
+      properties: {
+        type: { enum: ['IMAGE', 'TEXT'] },
+        sourceType: { enum: ['SCREEN_CROP'] },
+        file: { type: 'string', format: 'binary' },
+      },
+    });
+    expect(body.content['application/json'].schema).not.toEqual(
+      body.content['multipart/form-data'].schema,
+    );
   });
 });

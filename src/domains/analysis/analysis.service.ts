@@ -1,13 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Analysis } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
+import sharp = require('sharp');
 import { ApiError } from '../../common/http/api-error';
 import { AnalysisRepository } from './analysis.repository';
 import { AnalysisUsageService } from './analysis-usage.service';
 import { ImageAnalysisService } from './image-analysis.service';
 import { normalizeTextInput } from './text-analysis.input';
+import { TextAiWorkflowService } from './text-ai-workflow.service';
 
 @Injectable()
 export class AnalysisService {
@@ -17,10 +19,26 @@ export class AnalysisService {
     private readonly imageAnalysis: ImageAnalysisService,
     private readonly usage: AnalysisUsageService,
     private readonly config: ConfigService,
+    @Optional() private readonly textAi?: TextAiWorkflowService,
   ) {}
 
-  async createText(userId: string, input: unknown) {
+  async createText(userId: string, input: unknown, key?: string) {
     const text = normalizeTextInput(input);
+    if (this.config.get<string>('TEXT_AI_PROVIDER') === 'http') {
+      if (!this.textAi)
+        throw new ApiError(
+          503,
+          'ANALYSIS503',
+          'TEXT AI Provider가 연결되지 않았습니다.',
+        );
+      return this.textAi.create(userId, text, key);
+    }
+    if (key !== undefined)
+      throw new ApiError(
+        400,
+        'COMMON400',
+        'TEXT AI 비활성 모드에서는 Idempotency-Key를 지원하지 않습니다.',
+      );
     const requestHash = createHash('sha256')
       .update('TEXT\0')
       .update(text)
@@ -66,34 +84,9 @@ export class AnalysisService {
           'COMMON400',
           'Idempotency-Key는 1~128자의 공백 없는 ASCII 문자열이어야 합니다.',
         );
-      if (!file || file.size === 0)
+      if (!file)
         throw new ApiError(400, 'COMMON400', '이미지 파일이 필요합니다.');
-      const maxSize = this.positiveConfig('ANALYSIS_MAX_FILE_BYTES');
-      if (file.size > maxSize)
-        throw new ApiError(
-          413,
-          'COMMON413',
-          '이미지 크기 제한을 초과했습니다.',
-        );
-      const extension = extname(file.originalname).toLowerCase();
-      const jpeg =
-        file.mimetype === 'image/jpeg' &&
-        ['.jpg', '.jpeg'].includes(extension) &&
-        file.buffer.length >= 4 &&
-        file.buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
-      const png =
-        file.mimetype === 'image/png' &&
-        extension === '.png' &&
-        file.buffer.length >= 8 &&
-        file.buffer
-          .subarray(0, 8)
-          .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-      if (!jpeg && !png)
-        throw new ApiError(
-          415,
-          'COMMON415',
-          'JPEG 또는 PNG 이미지와 일치하는 MIME/확장자/시그니처가 필요합니다.',
-        );
+      await this.validateImage(file);
       const hash = createHash('sha256')
         .update('IMAGE\0')
         .update(file.mimetype)
@@ -232,6 +225,67 @@ export class AnalysisService {
     } finally {
       // 메모리 업로드만 사용한다. 응답/실패 경로 모두 원본 버퍼를 정리한다.
       file?.buffer.fill(0);
+    }
+  }
+
+  async createCapture(userId: string, file: Express.Multer.File, key?: string) {
+    try {
+      await this.validateImage(file);
+      if (file.buffer.length > 10 * 1024 * 1024)
+        throw new ApiError(
+          413,
+          'COMMON413',
+          'OCR 이미지는 10MiB 이하여야 합니다.',
+        );
+      if (
+        this.config.get<string>('TEXT_AI_PROVIDER') !== 'http' ||
+        !this.textAi
+      )
+        throw new ApiError(
+          503,
+          'ANALYSIS503',
+          'OCR 분석 Provider가 연결되지 않았습니다.',
+        );
+      return await this.textAi.createCapture(userId, file, key);
+    } finally {
+      file.buffer.fill(0);
+    }
+  }
+
+  private async validateImage(file: Express.Multer.File) {
+    if (file.size === 0)
+      throw new ApiError(400, 'COMMON400', '이미지 파일이 필요합니다.');
+    const maxSize = this.positiveConfig('ANALYSIS_MAX_FILE_BYTES');
+    if (file.size > maxSize)
+      throw new ApiError(413, 'COMMON413', '이미지 크기 제한을 초과했습니다.');
+    const extension = extname(file.originalname).toLowerCase();
+    const jpeg =
+      file.mimetype === 'image/jpeg' &&
+      ['.jpg', '.jpeg'].includes(extension) &&
+      file.buffer.length >= 4 &&
+      file.buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+    const png =
+      file.mimetype === 'image/png' &&
+      extension === '.png' &&
+      file.buffer.length >= 8 &&
+      file.buffer
+        .subarray(0, 8)
+        .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    if (!jpeg && !png)
+      throw new ApiError(
+        415,
+        'COMMON415',
+        'JPEG 또는 PNG 이미지와 일치하는 MIME/확장자/시그니처가 필요합니다.',
+      );
+    try {
+      // metadata() alone accepts truncated files; decode all pixels before side effects.
+      await sharp(file.buffer, { failOn: 'warning' }).stats();
+    } catch {
+      throw new ApiError(
+        400,
+        'COMMON400',
+        '손상되었거나 읽을 수 없는 이미지 파일입니다.',
+      );
     }
   }
 

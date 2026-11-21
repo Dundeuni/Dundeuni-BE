@@ -1,9 +1,14 @@
 import { UploadedImageCleanupInterceptor } from './uploaded-image-cleanup.interceptor';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { TextAiWorkflowService } from './text-ai-workflow.service';
+import {
+  TEXT_ANALYSIS_PROVIDER,
+  selectTextAnalysisProvider,
+} from './http-text-analysis.provider';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { AccessTokenGuard } from '../../common/auth/access-token.guard';
+import { RequestUserGuard } from '../../common/auth/request-user.guard';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AnalysisController } from './analysis.controller';
 import { AnalysisRepository } from './analysis.repository';
@@ -25,7 +30,7 @@ import {
           throw new Error('ANALYSIS_MAX_FILE_BYTES must be a positive integer');
         return {
           storage: memoryStorage(),
-          limits: { fileSize, files: 1, fields: 1, parts: 2, fieldSize: 64 },
+          limits: { fileSize, files: 1, fields: 2, parts: 3, fieldSize: 64 },
         };
       },
     }),
@@ -34,8 +39,14 @@ import {
   providers: [
     UploadedImageCleanupInterceptor,
     PrismaService,
-    AccessTokenGuard,
+    RequestUserGuard,
     AnalysisService,
+    TextAiWorkflowService,
+    {
+      provide: TEXT_ANALYSIS_PROVIDER,
+      inject: [ConfigService],
+      useFactory: selectTextAnalysisProvider,
+    },
     AnalysisRepository,
     AnalysisUsageService,
     ImageAnalysisService,

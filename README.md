@@ -72,3 +72,9 @@ feature/*, fix/*, chore/*, docs/*, refactor/*: dev를 대상으로 PR
 P0은 회원가입·로그인, 사용자 프로필, 이미지·텍스트·URL 검사, 분석 결과·기록 조회, 위험 단계와 판단 근거, 상황별 대응 가이드입니다.
 
 전화번호·QR 검사, 가족 연결·공유, FCM 알림과 퀴즈는 P1이며, 영상·통화 분석은 후속 확장 범위입니다.
+
+### Analysis POST: TEXT와 문자 캡처
+
+직접 입력은 application/json의 `{"type":"TEXT","sourceType":"DIRECT","text":"분석할 메시지"}`로 요청합니다. 기존 JSON의 sourceType 생략은 DIRECT로 유지합니다. 문자 캡처는 multipart/form-data의 `type=TEXT`, `sourceType=SCREEN_CROP`, `file`로 전송하세요. 일반 이미지 생성·변조 분석은 sourceType 없이 `type=IMAGE`, `file`로 요청합니다.
+
+`NODE_ENV=development`에서만 공통 RequestUserGuard가 development-user를 사용합니다. production 및 기타 환경에서는 POST에 JWT Bearer가 필요하며 sub로 저장합니다. 로그인·토큰 발급 기능은 제공하지 않습니다. 자세한 계약은 [POST TEXT/OCR](docs/API-POST-TEXT-OCR.md)을 참고하세요.
