@@ -1,3 +1,4 @@
+import { BoundedPhotoUploadInterceptor } from '../src/domains/analysis/photo-upload.interceptor';
 import { ConfigService } from '@nestjs/config';
 import { ExecutionContext } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -223,6 +224,7 @@ describe('photo selection HTTP API', () => {
       providers: [
         PhotoSelectionService,
         PhotoSelectionGuard,
+        BoundedPhotoUploadInterceptor,
         AccessTokenGuard,
         UploadedImageCleanupInterceptor,
         {
@@ -234,7 +236,7 @@ describe('photo selection HTTP API', () => {
           provide: ConfigService,
           useValue: new ConfigService({
             NODE_ENV: 'development',
-            ANALYSIS_MAX_FILE_BYTES: 10485760,
+            ANALYSIS_MAX_FILE_BYTES: 1024,
           }),
         },
       ],
@@ -244,6 +246,31 @@ describe('photo selection HTTP API', () => {
     await app.init();
   });
   afterAll(() => app.close());
+  it.each([1023, 1024, 1025])(
+    'limits multipart file bytes at reception: %s',
+    async (size) => {
+      const valid = await png();
+      const body = Buffer.concat([valid, Buffer.alloc(size - valid.length)]);
+      const calls = analysis.create.mock.calls.length;
+      const response = await request(app.getHttpServer())
+        .post('/api/analysis/image-uploads')
+        .attach('file', body, 'screen.png')
+        .expect(size > 1024 ? 413 : 201);
+      expect(analysis.create.mock.calls.length).toBe(calls);
+      if (size > 1024)
+        expect(response.body).toMatchObject({
+          isSuccess: false,
+          code: 'COMMON413',
+          result: null,
+        });
+      else
+        await request(app.getHttpServer())
+          .delete(
+            `/api/analysis/image-uploads/${response.body.result.uploadId}`,
+          )
+          .expect(200);
+    },
+  );
   it('uploads then selects by ID and rejects client-supplied coordinates', async () => {
     const upload = await request(app.getHttpServer())
       .post('/api/analysis/image-uploads')

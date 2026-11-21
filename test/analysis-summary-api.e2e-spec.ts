@@ -1,7 +1,14 @@
+const jwt = (sub = 'development-user') => {
+  const h = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString('base64url');
+  const p = Buffer.from(
+    JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + 3600 }),
+  ).toString('base64url');
+  return `${h}.${p}.${createHmac('sha256', 'photo-review-secret').update(`${h}.${p}`).digest('base64url')}`;
+};
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import { AnalysisController } from '../src/domains/analysis/analysis.controller';
 import { AnalysisService } from '../src/domains/analysis/analysis.service';
 import { AnalysisSummaryRepository } from '../src/domains/analysis/analysis-summary.repository';
@@ -21,7 +28,12 @@ describe('summary HTTP API', () => {
         UploadedImageCleanupInterceptor,
         { provide: AnalysisService, useValue: {} },
         { provide: PrismaService, useValue: prisma },
-        { provide: ConfigService, useValue: new ConfigService() },
+        {
+          provide: ConfigService,
+          useValue: new ConfigService({
+            JWT_ACCESS_SECRET: 'photo-review-secret',
+          }),
+        },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -46,6 +58,7 @@ describe('summary HTTP API', () => {
       });
       const response = await request(app.getHttpServer())
         .get(`/api/analysis/${id}/summary`)
+        .set('Authorization', `Bearer ${jwt()}`)
         .expect(200);
       expect(response.body).toMatchObject({
         isSuccess: true,
@@ -68,6 +81,7 @@ describe('summary HTTP API', () => {
   it('rejects malformed UUID', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/analysis/bad/summary')
+      .set('Authorization', `Bearer ${jwt()}`)
       .expect(400);
     expect(response.body.code).toBe('COMMON400');
   });
@@ -75,6 +89,7 @@ describe('summary HTTP API', () => {
     prisma.analysis.findFirst.mockResolvedValue(null);
     const response = await request(app.getHttpServer())
       .get(`/api/analysis/${id}/summary`)
+      .set('Authorization', `Bearer ${jwt()}`)
       .expect(404);
     expect(response.body).toMatchObject({
       isSuccess: false,

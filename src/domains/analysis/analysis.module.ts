@@ -1,3 +1,4 @@
+import { BoundedPhotoUploadInterceptor } from './photo-upload.interceptor';
 import {
   PhotoSelectionController,
   PhotoSelectionGuard,
@@ -42,6 +43,7 @@ import {
   controllers: [AnalysisController, PhotoSelectionController],
   providers: [
     PhotoSelectionGuard,
+    BoundedPhotoUploadInterceptor,
     PhotoSelectionService,
     PhotoRegionDetector,
     UploadedImageCleanupInterceptor,

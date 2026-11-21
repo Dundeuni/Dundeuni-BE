@@ -18,7 +18,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { BoundedPhotoUploadInterceptor } from './photo-upload.interceptor';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -43,7 +43,12 @@ export class PhotoSelectionGuard implements CanActivate {
     private readonly tokens: AccessTokenGuard,
   ) {}
   canActivate(context: ExecutionContext) {
-    if (this.config.get('NODE_ENV') === 'development') {
+    if (
+      process.env.NODE_ENV !== 'production' &&
+      this.config.get('NODE_ENV') === 'development' &&
+      !context.switchToHttp().getRequest<AuthenticatedRequest>().headers
+        .authorization
+    ) {
       context.switchToHttp().getRequest<AuthenticatedRequest>().user = {
         id: 'development-user',
       };
@@ -81,7 +86,11 @@ export class PhotoSelectionController {
     description:
       'uploadId, image.width/height, expiresAt, elements[{elementId,bbox}] 반환',
   })
-  @UseInterceptors(UploadedImageCleanupInterceptor, FileInterceptor('file'))
+  @ApiResponse({ status: 413, description: 'COMMON413: 업로드 파일 크기 초과' })
+  @UseInterceptors(
+    UploadedImageCleanupInterceptor,
+    BoundedPhotoUploadInterceptor,
+  )
   extract(
     @Req() request: AuthenticatedRequest,
     @UploadedFile() file?: Express.Multer.File,

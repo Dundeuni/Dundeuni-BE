@@ -798,3 +798,6 @@ Gemini summaryStatus(PENDING/COMPLETED/FAILED)는 요약 작업 상태다.
 `POST /api/analysis/image-uploads/{uploadId}/analyses`에 elementId 한 개를 전송한다.
 선택 전에는 AI 분석을 호출하지 않는다. GET 상세 응답에는 nullable `photoSelection`이 추가된다.
 요청·응답, 좌표 기준, 제한, migration 및 탐지 정확도 한계는 [사진 요소 선택 명세](../PHOTO-ELEMENT-SELECTION.md)를 따른다.
+
+### 사진 선택 업로드와 결과 조회
+사진 업로드는 Multer 수신 시 ANALYSIS_MAX_FILE_BYTES 제한을 적용하며 초과는 공통 COMMON413/HTTP 413이다. 선택 전에는 AI를 실행하지 않는다. 상세·요약 GET은 JWT Bearer를 요구하며 JWT sub로 소유권을 검사한다. 사진 업로드도 전달된 JWT를 개발 환경에서 우선 검증한다.

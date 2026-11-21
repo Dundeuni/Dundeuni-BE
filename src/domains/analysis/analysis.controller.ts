@@ -1,3 +1,9 @@
+import {
+  AccessTokenGuard,
+  AuthenticatedRequest,
+} from '../../common/auth/access-token.guard';
+import { UseGuards } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
 import { AnalysisSummaryRepository } from './analysis-summary.repository';
 import { Request } from 'express';
 import {
@@ -58,6 +64,9 @@ export class AnalysisController {
   ) {}
 
   @Get(':analysisId')
+  @UseGuards(AccessTokenGuard)
+  @ApiBearerAuth()
+  @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
   @ApiOperation({
     summary: '이미지 분석 결과 상세 조회',
     description:
@@ -72,12 +81,15 @@ export class AnalysisController {
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   getResult(
     @Param('analysisId', new ParseUUIDPipe()) id: string,
-    @Req() request: Request & { user?: { id: string } },
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.service.findOne(request.user?.id ?? 'development-user', id);
+    return this.service.findOne(request.user.id, id);
   }
 
   @Get(':analysisId/summary')
+  @UseGuards(AccessTokenGuard)
+  @ApiBearerAuth()
+  @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
   @ApiOperation({
     summary: '이미지 분석 비동기 요약 조회',
     description:
@@ -124,9 +136,9 @@ export class AnalysisController {
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   getSummary(
     @Param('analysisId', new ParseUUIDPipe()) id: string,
-    @Req() request: Request & { user?: { id: string } },
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.summaries.get(id, request.user?.id ?? 'development-user');
+    return this.summaries.get(id, request.user.id);
   }
 
   @Post()
