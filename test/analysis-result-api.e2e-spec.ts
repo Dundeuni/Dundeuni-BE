@@ -1,8 +1,21 @@
+const secret = 'review-test-secret';
+const token = (
+  sub = 'development-user',
+  exp = Math.floor(Date.now() / 1000) + 3600,
+) => {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
+    'base64url',
+  );
+  const payload = Buffer.from(JSON.stringify({ sub, exp })).toString(
+    'base64url',
+  );
+  return `${header}.${payload}.${createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url')}`;
+};
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import request from 'supertest';
 import { AnalysisController } from '../src/domains/analysis/analysis.controller';
 import { AnalysisService } from '../src/domains/analysis/analysis.service';
@@ -67,7 +80,13 @@ describe('analysis result GET API', () => {
         { provide: AnalysisSummaryRepository, useValue: {} },
         { provide: ImageAnalysisService, useValue: {} },
         { provide: AnalysisUsageService, useValue: {} },
-        { provide: ConfigService, useValue: new ConfigService() },
+        {
+          provide: ConfigService,
+          useValue: new ConfigService({
+            NODE_ENV: 'production',
+            JWT_ACCESS_SECRET: secret,
+          }),
+        },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -81,6 +100,20 @@ describe('analysis result GET API', () => {
     jest.clearAllMocks();
     repository.findWithModelResults.mockResolvedValue(row());
   });
+  it.each([
+    undefined,
+    'Bearer invalid',
+    `Bearer ${token('development-user', 1)}`,
+  ])('rejects missing, invalid or expired JWT: %s', async (authorization) => {
+    for (const suffix of ['', '/summary']) {
+      const req = request(app.getHttpServer()).get(
+        `/api/analysis/${id}${suffix}`,
+      );
+      if (authorization) req.set('Authorization', authorization);
+      const response = await req.expect(401);
+      expect(response.body.code).toBe('AUTH401');
+    }
+  });
   afterAll(async () => {
     await app.close();
   });
@@ -89,8 +122,12 @@ describe('analysis result GET API', () => {
     repository.findWithModelResults.mockResolvedValue(stored);
     const response = await request(app.getHttpServer())
       .get(`/api/analysis/${id}`)
+      .set('Authorization', `Bearer ${token()}`)
       .expect(200);
-    expect(repository.findWithModelResults).toHaveBeenCalledWith(id);
+    expect(repository.findWithModelResults).toHaveBeenCalledWith(
+      id,
+      'development-user',
+    );
     expect(response.body).toMatchObject({
       isSuccess: true,
       code: 'ANALYSIS200',
@@ -121,6 +158,7 @@ describe('analysis result GET API', () => {
   it('rejects invalid UUID before DB access', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/analysis/invalid')
+      .set('Authorization', `Bearer ${token()}`)
       .expect(400);
     expect(response.body).toMatchObject({
       isSuccess: false,
@@ -144,6 +182,7 @@ describe('analysis result GET API', () => {
       );
       const response = await request(app.getHttpServer())
         .get(`/api/analysis/${id}`)
+        .set('Authorization', `Bearer ${token()}`)
         .expect(404);
       expect(response.body).toMatchObject({
         isSuccess: false,
@@ -158,6 +197,7 @@ describe('analysis result GET API', () => {
     );
     const response = await request(app.getHttpServer())
       .get(`/api/analysis/${id}`)
+      .set('Authorization', `Bearer ${token()}`)
       .expect(500);
     expect(response.body).toMatchObject({
       isSuccess: false,
@@ -178,6 +218,7 @@ describe('analysis result GET API', () => {
       });
       const response = await request(app.getHttpServer())
         .get(`/api/analysis/${id}`)
+        .set('Authorization', `Bearer ${token()}`)
         .expect(200);
       expect(response.body.result).toMatchObject({
         status,
@@ -251,6 +292,7 @@ describe('analysis result GET API', () => {
       repository.findWithModelResults.mockResolvedValue(stored);
       const response = await request(app.getHttpServer())
         .get(`/api/analysis/${id}`)
+        .set('Authorization', `Bearer ${token()}`)
         .expect(200);
       expect(response.body.result).toMatchObject({
         aiRiskLevel: null,
@@ -269,6 +311,7 @@ describe('analysis result GET API', () => {
         stored.summaryStatus = summaryStatus;
         const again = await request(app.getHttpServer())
           .get(`/api/analysis/${id}`)
+          .set('Authorization', `Bearer ${token()}`)
           .expect(200);
         expect(again.body).toEqual(response.body);
       }
@@ -281,6 +324,7 @@ describe('analysis result GET API', () => {
     repository.findWithModelResults.mockResolvedValue(stored);
     const response = await request(app.getHttpServer())
       .get(`/api/analysis/${id}`)
+      .set('Authorization', `Bearer ${token()}`)
       .expect(200);
     for (const model of [
       response.body.result.models.generation,

@@ -152,7 +152,7 @@ export class AnalysisService {
     userId: string,
     id: string,
   ): Promise<AnalysisResultResponseDto> {
-    const row = await this.repository.findWithModelResults(id);
+    const row = await this.repository.findWithModelResults(id, userId);
     if (!row || row.userId !== userId || row.expiresAt <= new Date())
       throw new ApiError(404, 'COMMON404', '분석 기록을 찾을 수 없습니다.');
     const generation = this.publicModel(

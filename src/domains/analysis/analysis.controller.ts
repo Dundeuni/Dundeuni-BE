@@ -1,5 +1,11 @@
-import { AnalysisSummaryRepository } from './analysis-summary.repository';
 import { Request } from 'express';
+import { AnalysisSummaryRepository } from './analysis-summary.repository';
+import {
+  AccessTokenGuard,
+  AuthenticatedRequest,
+} from '../../common/auth/access-token.guard';
+import { UseGuards } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
 import {
   Body,
   Get,
@@ -58,10 +64,13 @@ export class AnalysisController {
   ) {}
 
   @Get(':analysisId')
+  @UseGuards(AccessTokenGuard)
+  @ApiBearerAuth()
+  @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
   @ApiOperation({
     summary: '이미지 분석 결과 상세 조회',
     description:
-      '저장된 분석 및 모델별 결과를 조회합니다. 요약은 기존 /summary에서 별도로 조회합니다. 개발용 인증 정책 유지.',
+      '저장된 분석 및 모델별 결과를 조회합니다. 요약은 기존 /summary에서 별도로 조회합니다. JWT 인증 및 사용자 소유권·만료 검증 적용.',
   })
   @ApiResponse({ status: 200, type: AnalysisResultResponseDto })
   @ApiResponse({ status: 400, description: 'COMMON400: UUID 형식 오류' })
@@ -72,16 +81,19 @@ export class AnalysisController {
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   getResult(
     @Param('analysisId', new ParseUUIDPipe()) id: string,
-    @Req() request: Request & { user?: { id: string } },
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.service.findOne(request.user?.id ?? 'development-user', id);
+    return this.service.findOne(request.user.id, id);
   }
 
   @Get(':analysisId/summary')
+  @UseGuards(AccessTokenGuard)
+  @ApiBearerAuth()
+  @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
   @ApiOperation({
     summary: '이미지 분석 비동기 요약 조회',
     description:
-      'PENDING/FAILED는 summary=null. 비활성화 또는 작업 등록 전 summaryStatus=null. 개발용 인증 정책 유지.',
+      'PENDING/FAILED는 summary=null. 비활성화 또는 작업 등록 전 summaryStatus=null. JWT 인증 및 사용자 소유권·만료 검증 적용.',
   })
   @ApiResponse({
     status: 200,
@@ -124,9 +136,9 @@ export class AnalysisController {
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   getSummary(
     @Param('analysisId', new ParseUUIDPipe()) id: string,
-    @Req() request: Request & { user?: { id: string } },
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.summaries.get(id, request.user?.id ?? 'development-user');
+    return this.summaries.get(id, request.user.id);
   }
 
   @Post()

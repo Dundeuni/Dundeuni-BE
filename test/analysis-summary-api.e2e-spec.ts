@@ -1,7 +1,20 @@
+const secret = 'review-test-secret';
+const token = (
+  sub = 'development-user',
+  exp = Math.floor(Date.now() / 1000) + 3600,
+) => {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
+    'base64url',
+  );
+  const payload = Buffer.from(JSON.stringify({ sub, exp })).toString(
+    'base64url',
+  );
+  return `${header}.${payload}.${createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url')}`;
+};
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import { AnalysisController } from '../src/domains/analysis/analysis.controller';
 import { AnalysisService } from '../src/domains/analysis/analysis.service';
 import { AnalysisSummaryRepository } from '../src/domains/analysis/analysis-summary.repository';
@@ -21,7 +34,13 @@ describe('summary HTTP API', () => {
         UploadedImageCleanupInterceptor,
         { provide: AnalysisService, useValue: {} },
         { provide: PrismaService, useValue: prisma },
-        { provide: ConfigService, useValue: new ConfigService() },
+        {
+          provide: ConfigService,
+          useValue: new ConfigService({
+            NODE_ENV: 'production',
+            JWT_ACCESS_SECRET: secret,
+          }),
+        },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -30,6 +49,20 @@ describe('summary HTTP API', () => {
       new ValidationPipe({ transform: true, whitelist: true }),
     );
     await app.init();
+  });
+  it.each([
+    undefined,
+    'Bearer invalid',
+    `Bearer ${token('development-user', 1)}`,
+  ])('rejects missing, invalid or expired JWT: %s', async (authorization) => {
+    for (const suffix of ['', '/summary']) {
+      const req = request(app.getHttpServer()).get(
+        `/api/analysis/${id}${suffix}`,
+      );
+      if (authorization) req.set('Authorization', authorization);
+      const response = await req.expect(401);
+      expect(response.body.code).toBe('AUTH401');
+    }
   });
   afterAll(async () => {
     await app.close();
@@ -46,6 +79,7 @@ describe('summary HTTP API', () => {
       });
       const response = await request(app.getHttpServer())
         .get(`/api/analysis/${id}/summary`)
+        .set('Authorization', `Bearer ${token()}`)
         .expect(200);
       expect(response.body).toMatchObject({
         isSuccess: true,
@@ -65,9 +99,35 @@ describe('summary HTTP API', () => {
       });
     },
   );
+  it.each(['bob', 'expired'])(
+    'does not disclose a summary owned by %s',
+    async (caseName) => {
+      prisma.analysis.findFirst.mockImplementation(async ({ where }) =>
+        where.userId === 'alice' && caseName !== 'expired'
+          ? { id, summaryStatus: 'COMPLETED', summary: 'private' }
+          : null,
+      );
+      const response = await request(app.getHttpServer())
+        .get(`/api/analysis/${id}/summary`)
+        .set(
+          'Authorization',
+          `Bearer ${token(caseName === 'bob' ? 'bob' : 'alice')}`,
+        )
+        .expect(404);
+      expect(response.body.code).toBe('COMMON404');
+      expect(prisma.analysis.findFirst).toHaveBeenLastCalledWith({
+        where: {
+          id,
+          userId: caseName === 'bob' ? 'bob' : 'alice',
+          expiresAt: { gt: expect.any(Date) },
+        },
+      });
+    },
+  );
   it('rejects malformed UUID', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/analysis/bad/summary')
+      .set('Authorization', `Bearer ${token()}`)
       .expect(400);
     expect(response.body.code).toBe('COMMON400');
   });
@@ -75,6 +135,7 @@ describe('summary HTTP API', () => {
     prisma.analysis.findFirst.mockResolvedValue(null);
     const response = await request(app.getHttpServer())
       .get(`/api/analysis/${id}/summary`)
+      .set('Authorization', `Bearer ${token()}`)
       .expect(404);
     expect(response.body).toMatchObject({
       isSuccess: false,

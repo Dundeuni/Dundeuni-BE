@@ -1,3 +1,10 @@
+const jwt = (sub = 'development-user') => {
+  const h = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString('base64url');
+  const p = Buffer.from(
+    JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + 3600 }),
+  ).toString('base64url');
+  return `${h}.${p}.${createHmac('sha256', 'db-review-secret').update(`${h}.${p}`).digest('base64url')}`;
+};
 import { AnalysisSummaryRepository } from '../src/domains/analysis/analysis-summary.repository';
 import { AnalysisSummaryWorker } from '../src/domains/analysis/analysis-summary.worker';
 import {
@@ -7,7 +14,7 @@ import {
 } from '../src/domains/analysis/gemini-summary.client';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -59,7 +66,9 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     );
   }
   beforeAll(async () => {
-    connection = new URL(parse(readFileSync('.env')).DATABASE_URL);
+    connection = new URL(
+      process.env.V1_DB_URL ?? parse(readFileSync('.env')).DATABASE_URL,
+    );
     if (!['localhost', '127.0.0.1'].includes(connection.hostname))
       throw new Error('Local test database required');
     const migrations = readdirSync('prisma/migrations')
@@ -81,6 +90,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       .overrideProvider(ConfigService)
       .useValue(
         new ConfigService({
+          JWT_ACCESS_SECRET: 'db-review-secret',
           ANALYSIS_MAX_FILE_BYTES: '1024',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '1000',
@@ -107,12 +117,20 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     await app.init();
     await app.listen(0, '127.0.0.1');
   });
+  it('scopes detail DB queries to the owner and active retention period', async () => {
+    const row = await repository.create('detail-owner', 'ownership', new Date(Date.now() + 60000));
+    expect(await repository.findWithModelResults(row.id, 'detail-owner')).not.toBeNull();
+    expect(await repository.findWithModelResults(row.id, 'other-user')).toBeNull();
+    await prisma.analysis.update({ where: { id: row.id }, data: { expiresAt: new Date(0) } });
+    expect(await repository.findWithModelResults(row.id, 'detail-owner')).toBeNull();
+  });
   afterAll(async () => {
     if (app) await app.close();
     if (prisma) await prisma.$disconnect();
     if (connection) sql(`DROP SCHEMA IF EXISTS "${schema}" CASCADE;`);
   });
   const summaryConfig = new ConfigService({
+    JWT_ACCESS_SECRET: 'db-review-secret',
     GEMINI_SUMMARY_ENABLED: 'true',
     GEMINI_SUMMARY_RETRY_MS: '1',
     GEMINI_SUMMARY_MAX_ATTEMPTS: '2',
@@ -273,6 +291,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     async (statuses) => {
       const id = await summaryReady();
       const config = new ConfigService({
+        JWT_ACCESS_SECRET: 'db-review-secret',
         GEMINI_SUMMARY_ENABLED: 'true',
         GEMINI_SUMMARY_MAX_ATTEMPTS: '3',
         GEMINI_SUMMARY_RETRY_MS: '100',
@@ -284,6 +303,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       );
       const client = new GeminiSummaryClient(
         new ConfigService({
+          JWT_ACCESS_SECRET: 'db-review-secret',
           GEMINI_API_KEY: 'mock',
           GEMINI_MODEL: 'gemini-test',
         }),
@@ -495,6 +515,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     'TIMEOUT',
   ] as const)('runs real service→Mock→Prisma flow for %s', async (scenario) => {
     const config = new ConfigService({
+      JWT_ACCESS_SECRET: 'db-review-secret',
       ANALYSIS_MAX_FILE_BYTES: '128',
       ANALYSIS_RETENTION_SECONDS: '86400',
       AI_REQUEST_TIMEOUT_MS: '30',
@@ -575,7 +596,10 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     expect(saved?.modelResults).toHaveLength(0);
   });
   it('v0.2 retry preserves successful CuRe, stores only allowed fields and reconstructs overall result', async () => {
-    const config = new ConfigService({ AI_REQUEST_TIMEOUT_MS: '1000' });
+    const config = new ConfigService({
+      JWT_ACCESS_SECRET: 'db-review-secret',
+      AI_REQUEST_TIMEOUT_MS: '1000',
+    });
     const row = await repository.create(
       'retry-user',
       'hash',
@@ -648,6 +672,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       ).toBe(1);
       const detail = await request(app.getHttpServer())
         .get(`/api/analysis/${id}`)
+        .set('Authorization', `Bearer ${jwt()}`)
         .expect(200);
       expect(detail.body.result).toMatchObject(created.body.result);
       expect(detail.body.result.models.generation).toMatchObject({
@@ -663,12 +688,14 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       );
       const pending = await request(app.getHttpServer())
         .get(`/api/analysis/${id}/summary`)
+        .set('Authorization', `Bearer ${jwt()}`)
         .expect(200);
       expect(pending.body.result).toMatchObject({
         summaryStatus: 'PENDING',
         summary: null,
       });
       const config = new ConfigService({
+        JWT_ACCESS_SECRET: 'db-review-secret',
         GEMINI_API_KEY: 'test-only',
         GEMINI_MODEL: 'gemini-test',
         GEMINI_TIMEOUT_MS: '5',
@@ -718,11 +745,13 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
         (
           await request(app.getHttpServer())
             .get(`/api/analysis/${id}`)
+            .set('Authorization', `Bearer ${jwt()}`)
             .expect(200)
         ).body,
       ).toEqual(detail.body);
       const summary = await request(app.getHttpServer())
         .get(`/api/analysis/${id}/summary`)
+        .set('Authorization', `Bearer ${jwt()}`)
         .expect(200);
       expect(summary.body.result.summaryStatus).toBe(after.summaryStatus);
       expect(summary.body.result.summary).toBe(after.summary);

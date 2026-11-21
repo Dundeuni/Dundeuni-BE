@@ -577,3 +577,6 @@ Gemini summaryStatus(PENDING/COMPLETED/FAILED)는 요약 작업 상태다.
 - null 점수는 미제공, [] 근거는 추가 근거 없음으로 표시하며 안전을 의미하지 않는다.
 - guides는 GET 전용 추가 필드다. POST 후 GET으로 상세·대응 안내를 받고 요약 상태는 /summary로 조회한다.
 - 고령층 대상 문구의 최종 UX 검토와 표시 순서는 FE/기획에서 확인한다.
+
+### 상세·요약 조회 인증
+GET /api/analysis/{analysisId} 및 /summary는 모든 환경에서 JWT Bearer가 필수다. JWT sub로 사용자 ID를 식별하며 상세 DB 조회에 id·userId·미만료 조건을 적용한다. 다른 사용자·만료·없는 기록은 COMMON404, 인증 누락·무효·만료는 AUTH401이다.

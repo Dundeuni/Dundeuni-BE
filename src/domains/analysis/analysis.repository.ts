@@ -147,9 +147,12 @@ export class AnalysisRepository {
     return saved[saved.length - 1] as Analysis;
   }
 
-  findWithModelResults(id: string) {
+  findWithModelResults(id: string, userId?: string) {
     return this.prisma.analysis.findUnique({
-      where: { id },
+      where: {
+        id,
+        ...(userId ? { userId, expiresAt: { gt: new Date() } } : {}),
+      },
       include: { modelResults: true },
     });
   }
