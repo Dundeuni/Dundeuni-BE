@@ -1,6 +1,6 @@
 # Analysis API
 
-분석 유형은 `IMAGE`, `TEXT`, `URL`을 P0으로 우선 지원합니다. `VIDEO`, `PHONE`, `QR`은 P1 이후 별도 이슈로 확장합니다.
+현재 요청 유형은 `SCREEN`, `IMAGE`, `TEXT`이며 IMAGE만 구현되어 있습니다. `VIDEO`, `PHONE`, `QR`은 P1 이후 별도 이슈로 확장합니다.
 
 AI 생성·변조 가능성과 사기 위험은 하나의 점수로 합치지 않고 별도 결과와 판단 근거를 반환합니다.
 
@@ -10,10 +10,10 @@ AI 생성·변조 가능성과 사기 위험은 하나의 점수로 합치지 �
 모든 요청은 임시 사용자 `development-user`로 저장한다. 로그인 구현 후 Guard와 인증 사용자 ID를 복원한다.
 
 요청은 `multipart/form-data`이며 필드는 `type=IMAGE`, `file`이다.
-P0 `AnalysisType`은 IMAGE/TEXT/URL이지만 TEXT/URL은 현재 400으로 거부한다.
-TEXT/URL 요청의 오류 메시지는 현재 IMAGE만 지원한다는 점을 명시한다.
+DB `AnalysisType`은 IMAGE/TEXT/URL을 유지하며 SCREEN/TEXT 및 기존 URL 요청은 현재 400으로 거부한다.
+SCREEN/TEXT 요청의 오류 메시지는 현재 IMAGE만 지원한다는 점을 명시한다.
 JPEG(`image/jpeg`, `.jpg`/`.jpeg`)와 PNG(`image/png`, `.png`)만 허용한다.
-MIME, 확장자, 파일 시그니처 및 크기를 확인한다. 전체 이미지 디코딩 검증은 실제 Provider 연결 시 필요하다.
+MIME, 확장자, 파일 시그니처 및 크기를 확인한 후 sharp로 픽셀을 디코딩한다. 빈 파일과 손상되거나 읽을 수 없는 이미지는 400으로 거부하며 DB 저장·이용량 예약·Provider 호출 전에 검증한다.
 `ANALYSIS_MAX_FILE_BYTES`로 상한을 설정한다. `.env.example`의 10 MiB는 개발 제안값이며 운영 정책 확정이 필요하다.
 
 ```bash
@@ -71,7 +71,7 @@ Analysis Controller에만 필터를 적용해 기존 Health 응답은 유지한�
 
 | HTTP | code        | 상황                                                |
 | ---- | ----------- | --------------------------------------------------- |
-| 400  | COMMON400   | type/file 누락, IMAGE 이외의 type, 잘못된 multipart |
+| 400  | COMMON400   | type/file 누락, 빈/손상 이미지, IMAGE 이외의 type, 잘못된 multipart |
 | 413  | COMMON413   | 크기 초과                                           |
 | 415  | COMMON415   | MIME/확장자/시그니처 불일치                         |
 | 429  | USAGE429    | 이용량 초과 (Usage 연동 후 실제 적용)               |

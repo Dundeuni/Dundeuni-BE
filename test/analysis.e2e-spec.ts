@@ -1,9 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { Analysis } from '@prisma/client';
 import request from 'supertest';
+import sharp from 'sharp';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
@@ -14,9 +15,19 @@ import { ImageModelsPublicResultDto } from '../src/domains/analysis/image-analys
 import { AnalysisUsageService } from '../src/domains/analysis/analysis-usage.service';
 
 const secret = 'test-access-secret';
+const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
+  'base64url',
+);
+const payload = Buffer.from(
+  JSON.stringify({
+    sub: 'authenticated-user',
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  }),
+).toString('base64url');
+const jwt = `${header}.${payload}.${createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url')}`;
 const png = () =>
   Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZkAAAAASUVORK5CYII=',
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC',
     'base64',
   );
 
@@ -131,7 +142,7 @@ describe('IMAGE analysis API', () => {
           ({
             JWT_ACCESS_SECRET: secret,
             AI_REQUEST_TIMEOUT_MS: '100',
-            ANALYSIS_MAX_FILE_BYTES: '128',
+            ANALYSIS_MAX_FILE_BYTES: '1024',
             ANALYSIS_RETENTION_SECONDS: '86400',
           })[key],
       })
@@ -167,7 +178,10 @@ describe('IMAGE analysis API', () => {
   afterAll(async () => {
     await app.close();
   });
-  const post = () => request(app.getHttpServer()).post('/api/analysis');
+  const post = () =>
+    request(app.getHttpServer())
+      .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt}`);
   const upload = () =>
     post().field('type', 'IMAGE').attach('file', png(), 'sample.png');
 
@@ -232,20 +246,83 @@ describe('IMAGE analysis API', () => {
   it('rejects oversized uploads', async () => {
     await post()
       .field('type', 'IMAGE')
-      .attach('file', Buffer.alloc(129), 'sample.png')
+      .attach('file', Buffer.alloc(1025), 'sample.png')
       .expect(413);
   });
-  it('uses the temporary user without an access token', async () => {
-    await upload().expect(202);
-    expect([...rows.values()][0].userId).toBe('development-user');
+  it('accepts a decoded JPEG', async () => {
+    const jpeg = await sharp({
+      create: { width: 1, height: 1, channels: 3, background: 'white' },
+    })
+      .jpeg()
+      .toBuffer();
+    const response = await post()
+      .field('type', 'IMAGE')
+      .attach('file', jpeg, 'sample.jpeg')
+      .expect(202);
+    expect(response.body).toMatchObject({
+      isSuccess: true,
+      code: 'ANALYSIS202',
+    });
   });
-  it('temporarily ignores invalid access tokens', async () => {
+  it.each([
+    ['empty', Buffer.alloc(0), 400],
+    ['PNG signature only', png().subarray(0, 8), 400],
+    ['truncated PNG', png().subarray(0, 45), 400],
+    ['JPEG signature only', Buffer.from([255, 216, 255, 224]), 400],
+    ['unsupported format', Buffer.from('GIF89a'), 415],
+  ])('rejects %s before any side effects', async (name, bytes, status) => {
+    const filename = String(name).includes('JPEG')
+      ? 'sample.jpg'
+      : 'sample.png';
+    const response = await post()
+      .field('type', 'IMAGE')
+      .attach('file', bytes as Buffer, filename)
+      .expect(status as number);
+    expect(response.body).toMatchObject({
+      isSuccess: false,
+      code: `COMMON${status}`,
+      result: null,
+    });
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(usage.reserveAiUsage).not.toHaveBeenCalled();
+    expect(provider.analyze).not.toHaveBeenCalled();
+  });
+  it('rejects duplicate type fields', async () => {
+    await post()
+      .field('type', 'IMAGE')
+      .field('type', 'IMAGE')
+      .attach('file', png(), 'sample.png')
+      .expect(400);
+  });
+  it('rejects an unexpected file field', async () => {
+    await post()
+      .field('type', 'IMAGE')
+      .attach('image', png(), 'sample.png')
+      .expect(400);
+  });
+  it('rejects TEXT with text while unimplemented', async () => {
+    await post().field('type', 'TEXT').field('text', 'example').expect(400);
+    expect(provider.analyze).not.toHaveBeenCalled();
+  });
+  it('blocks missing JWT before invoking AI', async () => {
+    await request(app.getHttpServer())
+      .post('/api/analysis')
+      .field('type', 'IMAGE')
+      .attach('file', png(), 'sample.png')
+      .expect(401);
+    expect(provider.analyze).not.toHaveBeenCalled();
+  });
+  it('uses the authenticated JWT subject', async () => {
+    await upload().expect(202);
+    expect([...rows.values()][0].userId).toBe('authenticated-user');
+  });
+  it('rejects invalid access tokens before AI invocation', async () => {
     await post()
       .set('Authorization', 'Bearer invalid')
       .field('type', 'IMAGE')
       .attach('file', png(), 'sample.png')
-      .expect(202);
-    expect([...rows.values()][0].userId).toBe('development-user');
+      .expect(401);
+    expect(provider.analyze).not.toHaveBeenCalled();
   });
   it.each(['QUEUED', 'ANALYZING'] as const)(
     'terminates an abandoned %s claim without another AI call',
@@ -563,7 +640,7 @@ describe('IMAGE analysis API', () => {
     );
     await post()
       .field('type', 'IMAGE')
-      .attach('file', Buffer.from([255, 216, 255, 217]), 'test.jpg')
+      .attach('file', await sharp(png()).jpeg().toBuffer(), 'test.jpg')
       .expect(202);
   });
   it('keeps health API working', async () => {
@@ -571,13 +648,13 @@ describe('IMAGE analysis API', () => {
       .get('/api/health')
       .expect(200, { status: 'ok' });
   });
-  it('documents unauthenticated multipart requests and all responses', () => {
+  it('documents authenticated multipart requests and all responses', () => {
     const doc = SwaggerModule.createDocument(
       app,
       new DocumentBuilder().addBearerAuth().build(),
     );
     const operation = doc.paths['/api/analysis'].post!;
-    expect(operation.security ?? []).toEqual([]);
+    expect(operation.security).toEqual([{ bearer: [] }]);
     expect(operation.requestBody).toMatchObject({
       content: {
         'multipart/form-data': { schema: { required: ['type', 'file'] } },

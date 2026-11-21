@@ -32,6 +32,12 @@ export class HttpImageAnalysisProvider implements ImageAnalysisProvider {
       url.hash
     )
       throw new Error('Invalid AI_SERVER_BASE_URL');
+    if (
+      (process.env.NODE_ENV === 'production' ||
+        config.get<string>('NODE_ENV') === 'production') &&
+      url.protocol !== 'https:'
+    )
+      throw new Error('Production AI_SERVER_BASE_URL must use HTTPS');
     this.endpoint = new URL('/internal/v1/image-analyses', url);
     this.token = token;
   }
