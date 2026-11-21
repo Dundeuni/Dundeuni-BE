@@ -4,6 +4,14 @@
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
   "transform": {
-    "^.+\\.(t|j)s$": ["ts-jest", { "tsconfig": { "esModuleInterop": true } }]
-  }
+    "^.+\\.(t|j)s$": [
+      "ts-jest",
+      {
+        "tsconfig": {
+          "esModuleInterop": true
+        }
+      }
+    ]
+  },
+  "roots": ["<rootDir>/test"]
 }

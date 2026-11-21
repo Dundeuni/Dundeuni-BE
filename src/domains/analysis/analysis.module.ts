@@ -1,3 +1,10 @@
+import { PhoneUsageService } from './phone-usage.service';
+import { HttpModule } from '@nestjs/axios';
+import { PhoneAnalysisController } from './phone-analysis.controller';
+import { PhoneAnalysisService } from './phone-analysis.service';
+import { PhoneAnalysisRepository } from './phone-analysis.repository';
+import { PhoneRiskService } from './phone-risk.service';
+import { ApickPhoneProvider } from './apick-phone.provider';
 import { UploadedImageCleanupInterceptor } from './uploaded-image-cleanup.interceptor';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -17,6 +24,7 @@ import {
 
 @Module({
   imports: [
+    HttpModule,
     MulterModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
@@ -30,8 +38,13 @@ import {
       },
     }),
   ],
-  controllers: [AnalysisController],
+  controllers: [AnalysisController, PhoneAnalysisController],
   providers: [
+    PhoneAnalysisService,
+    PhoneUsageService,
+    PhoneAnalysisRepository,
+    PhoneRiskService,
+    ApickPhoneProvider,
     UploadedImageCleanupInterceptor,
     PrismaService,
     AccessTokenGuard,
