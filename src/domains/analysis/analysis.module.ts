@@ -3,7 +3,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { AccessTokenGuard } from '../../common/auth/access-token.guard';
+import { RequestUserGuard } from '../../common/auth/request-user.guard';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AnalysisController } from './analysis.controller';
 import { AnalysisRepository } from './analysis.repository';
@@ -34,7 +34,7 @@ import {
   providers: [
     UploadedImageCleanupInterceptor,
     PrismaService,
-    AccessTokenGuard,
+    RequestUserGuard,
     AnalysisService,
     AnalysisRepository,
     AnalysisUsageService,

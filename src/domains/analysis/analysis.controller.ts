@@ -17,10 +17,10 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-// TODO: 로그인 구현 후 AccessTokenGuard와 인증 사용자 ID를 복원한다.
-// import { UseGuards, Req } from '@nestjs/common';
-// import { ApiBearerAuth } from '@nestjs/swagger';
-// import { AccessTokenGuard, AuthenticatedRequest } from '../../common/auth/access-token.guard';
+import { UseGuards, Req } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '../../common/auth/access-token.guard';
+import { RequestUserGuard } from '../../common/auth/request-user.guard';
 import { ApiErrorFilter } from '../../common/http/api-error';
 import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
@@ -40,9 +40,9 @@ function errorSchema(code: string) {
 
 @ApiExtraModels(ImageModelsPublicResultDto)
 @ApiTags('Analysis')
-// @ApiBearerAuth()
+@ApiBearerAuth()
 @Controller('analysis')
-// @UseGuards(AccessTokenGuard)
+@UseGuards(RequestUserGuard)
 @UseFilters(ApiErrorFilter)
 export class AnalysisController {
   constructor(private readonly service: AnalysisService) {}
@@ -131,7 +131,7 @@ export class AnalysisController {
     description:
       'COMMON400: type/file 누락, 빈 파일, 손상 이미지, SCREEN/TEXT 또는 잘못된 요청, AI 입력 오류(400/422)',
   })
-  // @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
+  @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
   @ApiResponse({
     status: 413,
     description: 'COMMON413: 업로드 또는 AI 전송 파일·본문 크기 초과',
@@ -153,11 +153,10 @@ export class AnalysisController {
   })
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   create(
-    // @Req() request: AuthenticatedRequest,
+    @Req() request: AuthenticatedRequest,
     @Body() _body: CreateAnalysisDto,
     @UploadedFile() file: Express.Multer.File | undefined,
   ) {
-    // return this.service.create(request.user.id, file);
-    return this.service.create('development-user', file);
+    return this.service.create(request.user.id, file);
   }
 }

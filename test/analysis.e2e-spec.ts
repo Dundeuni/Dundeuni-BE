@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -15,6 +15,16 @@ import { ImageModelsPublicResultDto } from '../src/domains/analysis/image-analys
 import { AnalysisUsageService } from '../src/domains/analysis/analysis-usage.service';
 
 const secret = 'test-access-secret';
+const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
+  'base64url',
+);
+const payload = Buffer.from(
+  JSON.stringify({
+    sub: 'authenticated-user',
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  }),
+).toString('base64url');
+const jwt = `${header}.${payload}.${createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url')}`;
 const png = () =>
   Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC',
@@ -134,7 +144,10 @@ describe('IMAGE analysis API', () => {
   afterAll(async () => {
     await app.close();
   });
-  const post = () => request(app.getHttpServer()).post('/api/analysis');
+  const post = () =>
+    request(app.getHttpServer())
+      .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt}`);
   const upload = () =>
     post().field('type', 'IMAGE').attach('file', png(), 'sample.png');
 
@@ -257,17 +270,25 @@ describe('IMAGE analysis API', () => {
     await post().field('type', 'TEXT').field('text', 'example').expect(400);
     expect(provider.analyze).not.toHaveBeenCalled();
   });
-  it('uses the temporary user without an access token', async () => {
-    await upload().expect(202);
-    expect([...rows.values()][0].userId).toBe('development-user');
+  it('blocks missing JWT before invoking AI', async () => {
+    await request(app.getHttpServer())
+      .post('/api/analysis')
+      .field('type', 'IMAGE')
+      .attach('file', png(), 'sample.png')
+      .expect(401);
+    expect(provider.analyze).not.toHaveBeenCalled();
   });
-  it('temporarily ignores invalid access tokens', async () => {
+  it('uses the authenticated JWT subject', async () => {
+    await upload().expect(202);
+    expect([...rows.values()][0].userId).toBe('authenticated-user');
+  });
+  it('rejects invalid access tokens before AI invocation', async () => {
     await post()
       .set('Authorization', 'Bearer invalid')
       .field('type', 'IMAGE')
       .attach('file', png(), 'sample.png')
-      .expect(202);
-    expect([...rows.values()][0].userId).toBe('development-user');
+      .expect(401);
+    expect(provider.analyze).not.toHaveBeenCalled();
   });
   it('creates a fresh analysis for each request without a key', async () => {
     const first = await upload().expect(202);
@@ -482,13 +503,13 @@ describe('IMAGE analysis API', () => {
       .get('/api/health')
       .expect(200, { status: 'ok' });
   });
-  it('documents unauthenticated multipart requests and all responses', () => {
+  it('documents authenticated multipart requests and all responses', () => {
     const doc = SwaggerModule.createDocument(
       app,
       new DocumentBuilder().addBearerAuth().build(),
     );
     const operation = doc.paths['/api/analysis'].post!;
-    expect(operation.security ?? []).toEqual([]);
+    expect(operation.security).toEqual([{ bearer: [] }]);
     expect(operation.requestBody).toMatchObject({
       content: {
         'multipart/form-data': { schema: { required: ['type', 'file'] } },

@@ -485,3 +485,35 @@ describe('provided v0.2 response contract', () => {
     ).toThrow();
   });
 });
+
+describe('production AI transport configuration', () => {
+  it.each([
+    'http://ai.example.com',
+    'http://127.0.0.1',
+    'https://user:secret@ai.example.com',
+    'https://ai.example.com?token=secret',
+  ])('rejects insecure or credential-bearing URL %s', (url) => {
+    expect(
+      () =>
+        new HttpImageAnalysisProvider(
+          new ConfigService({
+            NODE_ENV: 'production',
+            AI_SERVER_BASE_URL: url,
+            AI_SERVICE_TOKEN: 'test-token',
+          }),
+        ),
+    ).toThrow();
+  });
+  it('accepts HTTPS without exposing the configured secret', () => {
+    expect(
+      () =>
+        new HttpImageAnalysisProvider(
+          new ConfigService({
+            NODE_ENV: 'production',
+            AI_SERVER_BASE_URL: 'https://ai.example.com',
+            AI_SERVICE_TOKEN: 'test-token',
+          }),
+        ),
+    ).not.toThrow();
+  });
+});
