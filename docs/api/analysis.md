@@ -543,3 +543,58 @@ BE와 Studio는 시작 시의 환경변수가 `.env`보다 우선하므로 같�
 Railway 검증에는 공개 BE URL, 프로젝트/서비스/환경, 접근 권한, 배포된 commit/HTTP Adapter 여부,
 AI 환경변수와 프록시 timeout 설정, 승인된 테스트 이미지가 필요하다.
 Railway 주소·권한을 받기 전에는 로컬 검증을 Railway 검증으로 보고하지 않는다.
+
+## PB-23 보완 (2026-10-19, 이전 멱등성 제거 설명을 대체)
+
+선택적 `Idempotency-Key` 헤더를 지원한다. 1~128자의 공백 없는 ASCII 문자열이며
+현재 임시 사용자 `development-user` 범위로 적용된다. 실제 인증은 구현하지 않았다.
+요청 내용은 기존 requestHash(IMAGE + MIME + 이미지 바이트 SHA-256)로 비교한다.
+파일명은 요청 내용에 포함하지 않는다. 키 없이 요청하면 매번 새 분석이다.
+
+| 동일 사용자/키의 상태 | 응답 및 실행 정책 |
+| --- | --- |
+| 다른 요청 내용 | 409 COMMON409 |
+| 만료됨 | 409 COMMON409, 새 키 필요 |
+| QUEUED / ANALYZING | 409 COMMON409, 같은 키로 나중에 재요청 |
+| COMPLETED | 기존 분석의 202/ANALYSIS202 응답 재사용 |
+| FAILED | 저장된 오류 코드/상태를 재사용, 일반화된 실패 메시지 |
+
+서로 다른 키는 동일 이미지여도 별도 실행한다. 실패 후 새 실행에는 새 키가 필요하다.
+처리 중에 202 미완료 결과를 반환하지 않으므로 기존 동기식 성공 응답 필드를 유지한다.
+DB unique(userId, idempotencyKey)의 insert 성공자만 AI/사용량 예약을 실행한다.
+충돌자는 기존 행만 조회하며 자동 재시도·추가 AI 호출을 하지 않는다.
+키는 분석 보관 수명 동안 유지해야 한다. 행 삭제 후 같은 키는 새 요청으로 취급된다.
+프로세스가 비정상 종료되어 QUEUED/ANALYZING에 남으면 만료까지 409이며 자동 재실행하지 않는다.
+
+Migration `20261019000000_analysis_idempotency`는 nullable VARCHAR(128) 컬럼과
+복합 unique index만 추가한다. 기존 행은 NULL이므로 중복 없이 보존한다.
+이전 migration은 수정하지 않는다. DB 적용은 하지 않았다.
+배포 시 새 코드 실행 전에 migration이 필요하며, 큰 테이블의 index 생성 잠금은 배포 시 고려한다.
+
+AI 오류의 공개 응답은 기존 ApiError 계약을 유지한다. 내부 failureKind로 TIMEOUT,
+NETWORK, UPSTREAM, INVALID_RESPONSE를 구분한다. 내부 응답/토큰/스택을 응답이나 로그에 넣지 않는다.
+실패 저장과 사용량 해제는 각각 시도하며, 이들의 실패는 일반화된 서버 로그만 남기고
+최초 오류를 덮어쓰지 않는다. DB 장애 시 FAILED 저장 성공 자체를 보장하지는 못한다.
+Usage는 여전히 TODO이며 실제 차감·해제는 수행하지 않는다.
+
+타임아웃은 provider 호출에만 적용한다. Promise.race의 종료 후 늦은 provider 결과에는
+DB 저장 경로가 없으며 DB 트랜잭션을 타이머 콜백에서 변경하지 않는다.
+결과 DB 저장은 응답 수신·검증 뒤 수행하므로 타임아웃 콜백과 완료 저장을 경쟁시키지 않는다.
+기본 30000ms는 유지한다. AI 순차 모델당 120초 가정 시 ALL에 241000ms 이상이 필요하며
+실제 서버 실행 시간과 프록시 제한 확인 후 운영 설정을 정해야 한다.
+
+GET /api/analysis/:analysisId는 현재 브랜치에 없다. #89에서는 UUID 검증, 소유권 검사,
+미존재/만료 처리, DB 오류 COMMON500 변환, 오류 DTO/Swagger 및 조회 테스트가 필요하다.
+기존 findWithModelResults를 재사용할 수 있으며 현재 변경에 GET API는 포함하지 않는다.
+
+### PB-23 실제 PostgreSQL 검증 완료 (2026-10-19)
+
+별도 로컬 테스트 DB에서 기존 4개 및 PB-23 migration을 deploy하고 Prisma diff가 없음을 확인했다.
+단일/서로 다른 서버 프로세스의 동시 12요청 각각에서 분석 1행, 모델 결과 2행,
+AI 실행 1회, Usage 예약 호출 1회였다. 동일 키 재사용/충돌/실패/만료 A~G 검증도 통과했다.
+기존 DB에는 migration을 적용하지 않았고 #7 summary_jobs 테이블과 이력을 보존했다.
+실제 Usage 차감은 TODO이며 호출 횟수만 검증했다.
+
+준비된 격리 DB의 비공개 연결 상태 파일이 있으면 `node scripts/pb23/test.cjs`로
+DB suite까지 포함한 `npm test -- --runInBand`를 실행한다. 일반 npm test에서는 DB suite가 opt-in이다.
+자세한 비교표·SQL 근거·백업 위치는 `docs/PB-23-report.md`를 참조한다.

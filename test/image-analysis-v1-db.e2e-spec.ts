@@ -64,8 +64,15 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
   }
   beforeAll(async () => {
     connection = new URL(
-      process.env.V1_DB_URL ?? parse(readFileSync('.env')).DATABASE_URL,
+      process.env.PB23_DB_URL ??
+        process.env.V1_DB_URL ??
+        parse(readFileSync('.env')).DATABASE_URL,
     );
+    if (
+      process.env.PB23_DB_URL &&
+      !/^pb23_test_\d+$/.test(connection.pathname.slice(1))
+    )
+      throw new Error('PB23 isolated database required');
     if (!['localhost', '127.0.0.1'].includes(connection.hostname))
       throw new Error('Local test database required');
     const migrations = readdirSync('prisma/migrations')
@@ -108,6 +115,63 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     );
     await app.init();
     await app.listen(0, '127.0.0.1');
+  });
+  it('atomically terminates an abandoned claim and rejects late model/result writes in PostgreSQL', async () => {
+    const claim = await repository.claim(
+      'recovery-user',
+      'hash',
+      new Date(Date.now() + 3600000),
+      randomUUID(),
+    );
+    const id = claim.analysis.id;
+    await prisma.analysis.update({
+      where: { id },
+      data: { status: 'ANALYZING', createdAt: new Date(Date.now() - 120000) },
+    });
+    const cutoff = new Date(Date.now() - 60000);
+    const recovered = await Promise.all([
+      repository.terminateStale(id, cutoff),
+      repository.terminateStale(id, cutoff),
+    ]);
+    expect(
+      recovered.every(
+        (row) => row.status === 'FAILED' && row.errorCode === 'ANALYSIS503',
+      ),
+    ).toBe(true);
+    await repository.fail(id, 'COMMON500');
+    await expect(
+      repository.complete(id, {
+        aiGenerationScore: 50,
+        aiRiskLevel: 'LOW',
+        reasons: [],
+        modelVersion: 'late',
+      }),
+    ).rejects.toThrow();
+    expect(await repository.findWithModelResults(id)).toMatchObject({
+      status: 'FAILED',
+      errorCode: 'ANALYSIS503',
+      modelVersion: null,
+      modelResults: [],
+    });
+    const completed = await repository.create(
+      'recovery-user',
+      'completed',
+      new Date(Date.now() + 3600000),
+    );
+    await repository.complete(completed.id, {
+      aiGenerationScore: 50,
+      aiRiskLevel: 'LOW',
+      reasons: [],
+      modelVersion: 'saved',
+    });
+    await repository.terminateStale(
+      completed.id,
+      new Date(Date.now() + 3600000),
+    );
+    expect(await repository.findWithModelResults(completed.id)).toMatchObject({
+      status: 'COMPLETED',
+      modelVersion: 'saved',
+    });
   });
   afterAll(async () => {
     if (app) await app.close();

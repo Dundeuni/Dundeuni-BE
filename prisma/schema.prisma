@@ -56,6 +56,7 @@ model Analysis {
   type              AnalysisType
   status            AnalysisStatus @default(QUEUED)
   requestHash       String
+  idempotencyKey    String?        @db.VarChar(128)
   aiGenerationScore Float?
   aiRiskLevel       String?
   reasons           Json?
@@ -72,6 +73,7 @@ model Analysis {
   summaryModel      String?
   summarizedAt      DateTime?
 
+  @@unique([userId, idempotencyKey])
   @@map("analysis_requests")
 }
 

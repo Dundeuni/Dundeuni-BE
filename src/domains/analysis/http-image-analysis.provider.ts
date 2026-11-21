@@ -5,6 +5,7 @@ import type {
   ImageAnalysisProvider,
 } from './image-analysis.service';
 import { validateImageAnalysisRequest } from './image-analysis-request.validator';
+import { ImageAnalysisError } from './image-analysis.error';
 
 /** BE→AI v0.2 transport. No automatic retry: a new attempt requires caller-owned context/budget. */
 export class HttpImageAnalysisProvider implements ImageAnalysisProvider {
@@ -47,6 +48,7 @@ export class HttpImageAnalysisProvider implements ImageAnalysisProvider {
   ): Promise<unknown> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const abort = new AbortController();
+    let phase: 'NETWORK' | 'INVALID_RESPONSE' = 'NETWORK';
     try {
       if (!request) throw new Error('Missing AI context');
       validateImageAnalysisRequest(request);
@@ -77,7 +79,7 @@ export class HttpImageAnalysisProvider implements ImageAnalysisProvider {
         timeout,
         Date.parse(request.deadlineAt) - Date.now(),
       );
-      if (budget <= 0) throw new Error('AI deadline expired');
+      if (budget <= 0) throw new ImageAnalysisError('TIMEOUT');
       timer = setTimeout(() => abort.abort(), budget);
       const combined = signal
         ? AbortSignal.any([signal, abort.signal])
@@ -130,8 +132,9 @@ export class HttpImageAnalysisProvider implements ImageAnalysisProvider {
             'AI 서버가 이미지 요청을 처리할 수 없습니다.',
           );
         }
-        throw new Error('AI HTTP failure');
+        throw new ImageAnalysisError('UPSTREAM');
       }
+      phase = 'INVALID_RESPONSE';
       const value: unknown = await response.json();
       if (
         !value ||
@@ -143,10 +146,8 @@ export class HttpImageAnalysisProvider implements ImageAnalysisProvider {
       return value;
     } catch (error) {
       if (error instanceof ApiError) throw error;
-      throw new ApiError(
-        503,
-        'ANALYSIS503',
-        '이미지 분석을 수행할 수 없습니다.',
+      throw new ImageAnalysisError(
+        abort.signal.aborted || signal?.aborted ? 'TIMEOUT' : phase,
       );
     } finally {
       if (timer) clearTimeout(timer);

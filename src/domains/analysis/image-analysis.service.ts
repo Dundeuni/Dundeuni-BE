@@ -8,6 +8,7 @@ import {
 import { Inject, Injectable } from '@nestjs/common';
 import { validateAiImageResponseV02 } from './image-analysis-v1.validator';
 import { ApiError } from '../../common/http/api-error';
+import { ImageAnalysisError } from './image-analysis.error';
 
 export interface ImageAnalysisResult {
   aiGenerationScore: number;
@@ -81,13 +82,13 @@ export class ImageAnalysisService {
         ? Date.parse(request.deadlineAt) - Date.now()
         : timeoutMs;
       if (!Number.isFinite(deadlineMs) || deadlineMs <= 0)
-        throw new Error('AI deadline expired');
+        throw new ImageAnalysisError('TIMEOUT');
       const value = await Promise.race([
         this.provider.analyze(file, request, abort.signal),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => {
-              reject(new Error('AI deadline exceeded'));
+              reject(new ImageAnalysisError('TIMEOUT'));
               abort.abort();
             },
             Math.min(timeoutMs, deadlineMs),
@@ -156,11 +157,7 @@ export class ImageAnalysisService {
       };
     } catch (error) {
       if (error instanceof ApiError) throw error;
-      throw new ApiError(
-        503,
-        'ANALYSIS503',
-        '이미지 분석을 수행할 수 없습니다.',
-      );
+      throw new ImageAnalysisError('INVALID_RESPONSE');
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }

@@ -26,15 +26,63 @@ export class AnalysisRepository {
       },
     });
   }
+  /** The unique insert is the execution claim; losers never reserve usage or call AI. */
+  async claim(
+    userId: string,
+    requestHash: string,
+    expiresAt: Date,
+    idempotencyKey: string,
+  ) {
+    try {
+      const analysis = await this.prisma.analysis.create({
+        data: {
+          userId,
+          requestHash,
+          expiresAt,
+          idempotencyKey,
+          type: AnalysisType.IMAGE,
+        },
+      });
+      return { analysis, claimed: true };
+    } catch (error) {
+      if (
+        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+        error.code !== 'P2002'
+      )
+        throw error;
+      const analysis = await this.prisma.analysis.findUnique({
+        where: { userId_idempotencyKey: { userId, idempotencyKey } },
+      });
+      if (!analysis) throw error;
+      return { analysis, claimed: false };
+    }
+  }
+  /** Terminal recovery only: never re-execute AI while a prior process might still run. */
+  async terminateStale(id: string, cutoff: Date) {
+    await this.prisma.analysis.updateMany({
+      where: {
+        id,
+        status: { in: ['QUEUED', 'ANALYZING'] },
+        createdAt: { lte: cutoff },
+        errorCode: null,
+      },
+      data: {
+        status: 'FAILED',
+        errorCode: 'ANALYSIS503',
+        completedAt: new Date(),
+      },
+    });
+    return this.prisma.analysis.findUniqueOrThrow({ where: { id } });
+  }
   analyzing(id: string) {
     return this.prisma.analysis.update({
-      where: { id },
+      where: { id, status: 'QUEUED' },
       data: { status: 'ANALYZING' },
     });
   }
   complete(id: string, result: ImageAnalysisResult) {
     return this.prisma.analysis.update({
-      where: { id },
+      where: { id, NOT: { status: 'FAILED' } },
       data: {
         status: 'COMPLETED',
         aiGenerationScore: result.aiGenerationScore,
@@ -124,7 +172,7 @@ export class AnalysisRepository {
     const saved = await this.prisma.$transaction([
       ...writes,
       this.prisma.analysis.update({
-        where: { id },
+        where: { id, NOT: { status: 'FAILED' } },
         data: {
           status: result.status === 'FAILED' ? 'FAILED' : 'COMPLETED',
           imageResultStatus: result.status,
@@ -185,8 +233,8 @@ export class AnalysisRepository {
     });
   }
   fail(id: string, errorCode: string) {
-    return this.prisma.analysis.update({
-      where: { id },
+    return this.prisma.analysis.updateMany({
+      where: { id, status: { in: ['QUEUED', 'ANALYZING'] }, errorCode: null },
       data: { status: 'FAILED', errorCode, completedAt: new Date() },
     });
   }
