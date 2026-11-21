@@ -1,3 +1,4 @@
+import { PhoneUsageService } from '../src/domains/analysis/phone-usage.service';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
@@ -36,6 +37,7 @@ const wire = (data: object = {}) => ({
 describe('PB-04 phone analysis (mock HTTP and DB)', () => {
   let app: INestApplication;
   const post = jest.fn();
+  const reserve = jest.fn();
   const create = jest.fn(),
     update = jest.fn();
   let previousKey: string | undefined;
@@ -45,13 +47,23 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
       controllers: [PhoneAnalysisController],
       providers: [
         PhoneAnalysisService,
+        PhoneUsageService,
         PhoneAnalysisRepository,
         PhoneRiskService,
         ApickPhoneProvider,
         AccessTokenGuard,
-        { provide: ConfigService, useValue: { get: () => secret } },
+        {
+          provide: ConfigService,
+          useValue: new ConfigService({
+            JWT_ACCESS_SECRET: secret,
+            PHONE_DAILY_LIMIT: '2',
+          }),
+        },
         { provide: HttpService, useValue: { post } },
-        { provide: PrismaService, useValue: { analysis: { create, update } } },
+        {
+          provide: PrismaService,
+          useValue: { analysis: { create, update }, $queryRaw: reserve },
+        },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -69,6 +81,7 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
   beforeEach(() => {
     jest.resetAllMocks();
     process.env.APICK_AUTH_KEY = 'mock-key';
+    reserve.mockResolvedValue([{ count: 1 }]);
     post.mockReturnValue(of({ status: 200, data: wire() }));
     create.mockResolvedValue({ id: 'd734f69e-ce2e-4914-8a2e-230713d37c96' });
     update.mockResolvedValue({});
@@ -78,6 +91,34 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
       .post('/api/analyses/phone')
       .auth(token, { type: 'bearer' })
       .send({ phoneNumber });
+  it('rejects concurrent requests above the paid-call limit before HTTP', async () => {
+    let count = 0;
+    reserve.mockImplementation(async () => (++count <= 2 ? [{ count }] : []));
+    const responses = await Promise.all([send(), send(), send(), send()]);
+    expect(responses.map((r) => r.status).sort()).toEqual([201, 201, 429, 429]);
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(
+      responses
+        .filter((r) => r.status === 429)
+        .every((r) => r.body.code === 'USAGE429'),
+    ).toBe(true);
+  });
+  it.each([
+    '01012345678',
+    '0212345678',
+    '010-1234-5678',
+    1012345678,
+    '01012345678+',
+  ])('never stores a phone-like report count %s', async (count) => {
+    post.mockReturnValue(
+      of({ status: 200, data: wire({ spam_count: count }) }),
+    );
+    await send().expect(503);
+    expect(update.mock.calls.every(([args]) => !args.data.phoneResult)).toBe(
+      true,
+    );
+    expect(JSON.stringify(update.mock.calls)).not.toContain(String(count));
+  });
   test.each([
     '01012345678',
     '010-1234-5678',

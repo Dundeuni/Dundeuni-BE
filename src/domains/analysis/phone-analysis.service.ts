@@ -1,3 +1,4 @@
+import { PhoneUsageService } from './phone-usage.service';
 import { Injectable } from '@nestjs/common';
 import { ApiError } from '../../common/http/api-error';
 import { ApickPhoneProvider } from './apick-phone.provider';
@@ -11,6 +12,7 @@ export class PhoneAnalysisService {
     private readonly repository: PhoneAnalysisRepository,
     private readonly provider: ApickPhoneProvider,
     private readonly risk: PhoneRiskService,
+    private readonly usage: PhoneUsageService,
   ) {}
   async create(
     userId: string,
@@ -24,6 +26,8 @@ export class PhoneAnalysisService {
         `${number.slice(0, number.startsWith('02') ? 2 : 3)}${'*'.repeat(number.length - (number.startsWith('02') ? 2 : 3))}`,
       );
       id = row.id;
+      // Charge every attempted paid lookup, including uncertain upstream failures; no automatic retry.
+      await this.usage.reserve(userId);
       const data = await this.provider.analyze(number);
       await this.repository.complete(id, data, this.risk.assess(data));
       return { analysisId: id, status: 'COMPLETED' };

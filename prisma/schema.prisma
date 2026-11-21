@@ -116,3 +116,11 @@ model PhoneAnalysisResult {
 
   @@map("phone_analysis_results")
 }
+
+model PhoneDailyUsage {
+  userId String
+  day String
+  count Int
+  @@id([userId, day])
+  @@map("phone_daily_usage")
+}

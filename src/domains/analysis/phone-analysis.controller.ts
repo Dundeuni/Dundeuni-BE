@@ -55,6 +55,10 @@ export class PhoneAnalysisController {
     description: 'AUTH401: JWT 누락/만료/무효 (기존 인증 코드)',
   })
   @ApiResponse({
+    status: 429,
+    description: 'USAGE429: 사용자별 일일 호출 한도 초과',
+  })
+  @ApiResponse({
     status: 503,
     description:
       'EXTERNAL_API_UNAVAILABLE / APICK_QUOTA_EXCEEDED / APICK_AUTHENTICATION_FAILED',

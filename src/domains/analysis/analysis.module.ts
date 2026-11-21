@@ -1,3 +1,4 @@
+import { PhoneUsageService } from './phone-usage.service';
 import { HttpModule } from '@nestjs/axios';
 import { PhoneAnalysisController } from './phone-analysis.controller';
 import { PhoneAnalysisService } from './phone-analysis.service';
@@ -40,6 +41,7 @@ import {
   controllers: [AnalysisController, PhoneAnalysisController],
   providers: [
     PhoneAnalysisService,
+    PhoneUsageService,
     PhoneAnalysisRepository,
     PhoneRiskService,
     ApickPhoneProvider,

@@ -66,3 +66,13 @@ PB-05는 소유권·만료 검사 후 이 관계를 읽는 방식으로 확장�
 Swagger에서 테스트 JWT와 검증할 번호로 위 요청을 실행한다. **APICK 포인트가 소모될 수 있다.**
 201 응답 및 DB의 COMPLETED/마스킹/정규화 필드를 확인한다.
 이 작업 중 실제 APICK 호출과 실제 DB migration 적용은 수행하지 않았다.
+
+## 사용자별 유료 조회 한도
+
+`PHONE_DAILY_LIMIT` 기본 10회, 양의 정수 필수. UTC 날짜별 PostgreSQL 원자적 UPSERT로 예약한다.
+한도 초과는 공통 오류 envelope의 HTTP 429 / `USAGE429`로 반환하며 APICK은 호출하지 않는다.
+예약은 외부 요청 직전에 수행한다. 네트워크 오류·APICK 오류·결과 저장 실패도 이미 비용이 발생했을 수 있어
+예약을 환불하지 않으며 자동 재시도하지 않는다. DB 생성 실패와 입력 검증 실패는 예약하지 않는다.
+배포 전 `20261118000000_phone_daily_usage` migration이 필요하다.
+신고 건수는 1~8자리 정수 및 선택적 `+`만 보관한다. 전화번호 길이 또는 조회 번호가 들어온 건수는
+계약 오류로 처리하여 reportCountRaw/rawData/normalizedData에 저장하지 않는다.

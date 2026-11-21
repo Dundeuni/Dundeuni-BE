@@ -102,7 +102,11 @@ export class ApickPhoneProvider {
       )
         throw unavailable();
       const raw = count == null ? null : String(count);
-      if (raw !== null && !/^\d+\+?$/.test(raw)) throw unavailable();
+      if (
+        raw !== null &&
+        (!/^\d{1,8}\+?$/.test(raw) || raw.replace(/\D/g, '') === number)
+      )
+        throw unavailable();
       const reportCount = raw === null ? null : Number(raw.replace('+', ''));
       if (
         reportCount !== null &&
