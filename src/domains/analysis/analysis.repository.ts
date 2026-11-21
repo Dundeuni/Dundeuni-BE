@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
+  Analysis,
   AnalysisType,
   Prisma,
   ImageResultStatus,
@@ -49,11 +50,22 @@ export class AnalysisRepository {
     analysisId: string,
     result: ImageModelsPublicResultDto,
   ) {
+    const writes = this.modelWrites(analysisId, result);
+    await this.prisma.$transaction([
+      ...writes,
+      this.prisma.analysis.update({
+        where: { id: analysisId },
+        data: { imageResultStatus: result.status as ImageResultStatus },
+      }),
+    ]);
+  }
+
+  private modelWrites(analysisId: string, result: ImageModelsPublicResultDto) {
     const models: [ImageModelKind, ImageModelPublicResultDto | null][] = [
       ['GENERATION', result.generation],
       ['MANIPULATION', result.manipulation],
     ];
-    const writes = models.flatMap(([kind, value]) => {
+    return models.flatMap(([kind, value]) => {
       if (value === null) return []; // 미요청 모델의 기존 결과는 유지한다.
       if (
         !['SUCCEEDED', 'FAILED'].includes(value.status) ||
@@ -99,14 +111,40 @@ export class AnalysisRepository {
         }),
       ];
     });
-    // imageResultStatus는 해당 AI 응답 집계 상태이며 BE 작업 상태는 별도로 유지한다.
-    await this.prisma.$transaction([
+  }
+
+  async completeV1(
+    id: string,
+    result: ImageModelsPublicResultDto,
+    completedAt: Date,
+  ): Promise<Analysis> {
+    const generation =
+      result.generation?.status === 'SUCCEEDED' ? result.generation : null;
+    const writes = this.modelWrites(id, result);
+    const saved = await this.prisma.$transaction([
       ...writes,
       this.prisma.analysis.update({
-        where: { id: analysisId },
-        data: { imageResultStatus: result.status as ImageResultStatus },
+        where: { id },
+        data: {
+          status: result.status === 'FAILED' ? 'FAILED' : 'COMPLETED',
+          imageResultStatus: result.status,
+          errorCode: result.status === 'FAILED' ? 'ANALYSIS503' : null,
+          completedAt,
+          // 미요청 generation은 기존 레거시 생성 결과도 덮어쓰지 않는다.
+          ...(result.generation === null
+            ? {}
+            : {
+                aiGenerationScore: generation?.displayScore ?? null,
+                aiRiskLevel: null,
+                reasons: generation
+                  ? (generation.reasons as Prisma.InputJsonValue)
+                  : Prisma.DbNull,
+                modelVersion: generation?.modelVersion ?? null,
+              }),
+        },
       }),
     ]);
+    return saved[saved.length - 1] as Analysis;
   }
 
   findWithModelResults(id: string) {

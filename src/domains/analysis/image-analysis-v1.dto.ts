@@ -10,8 +10,15 @@ export type AiModelDecision =
   | 'NO_CLEAR_MANIPULATION_SIGNAL'
   | 'INCONCLUSIVE';
 
-// TODO: 원문에서 discriminator/PNG 필드명/크기/좌표/인코딩 규칙 확인 후 구체화.
-export type AiPngBase64Localization = Readonly<Record<string, unknown>>;
+export interface AiPngBase64Localization {
+  format: 'PNG_BASE64';
+  kind: 'MANIPULATION_HEATMAP';
+  mimeType: 'image/png';
+  data: string;
+  imageSize: { width: number; height: number };
+  mapSize: { width: number; height: number };
+  coordinateSpace: 'ANALYSIS_IMAGE';
+}
 export interface AiModelError {
   code: string;
   // TODO: message, retryable 등 실제 필드명과 필수 여부 확인.
@@ -96,4 +103,24 @@ export class ImageModelsPublicResultDto {
   generation!: ImageModelPublicResultDto | null;
   @ApiProperty({ type: ImageModelPublicResultDto, nullable: true })
   manipulation!: ImageModelPublicResultDto | null;
+}
+
+export interface ImageOverallResult {
+  decision:
+    'GENERATION_OR_MANIPULATION_SUSPECTED' | 'INCONCLUSIVE' | 'NO_CLEAR_SIGNAL';
+  decisionLabel: string;
+  policyVersion: 'image-overall-v1';
+  suspectedKinds: ('generation' | 'manipulation')[];
+  uncertainKinds: ('generation' | 'manipulation')[];
+}
+/** v0.2 확정된 필드를 기존 v1 타입에서 확장. legacy validator 사용자는 그대로 유지한다. */
+export interface AiModelResultV02 extends AiModelResultV1 {
+  rawScore: number | null;
+  decisionLabel: string | null;
+}
+export interface AiImageAnalysisResponseV02 extends AiImageAnalysisResponseV1 {
+  contractVersion: '1.0';
+  generation: AiModelResultV02 | null;
+  manipulation: AiModelResultV02 | null;
+  overallResult: ImageOverallResult;
 }

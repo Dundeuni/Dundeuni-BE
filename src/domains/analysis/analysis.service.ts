@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Analysis } from '@prisma/client';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import sharp = require('sharp');
 import { ApiError } from '../../common/http/api-error';
@@ -69,12 +69,46 @@ export class AnalysisService {
       );
       let analysis = await this.repository.create(userId, hash, expiresAt);
       let reserved = false;
+      let modelFailureSaved = false;
       try {
         await this.usage.reserveAiUsage(userId, analysis.id);
         reserved = true;
         await this.repository.analyzing(analysis.id);
-        const result = await this.imageAnalysis.analyze(file);
-        analysis = await this.repository.complete(analysis.id, result);
+        const timeoutMs = Number(
+          this.config.get<string>('AI_REQUEST_TIMEOUT_MS') ?? 30000,
+        );
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
+          throw new ApiError(
+            500,
+            'COMMON500',
+            'AI 제한 시간 설정이 올바르지 않습니다.',
+          );
+        const result = await this.imageAnalysis.analyze(file, {
+          file,
+          analysisId: analysis.id,
+          elementId: randomUUID(),
+          requestId: randomUUID(),
+          sourceType: 'IMAGE',
+          models: 'ALL',
+          deadlineAt: new Date(Date.now() + timeoutMs).toISOString(),
+        });
+        if ('format' in result) {
+          analysis = await this.repository.completeV1(
+            analysis.id,
+            result.models,
+            result.completedAt,
+          );
+          if (result.models.status === 'FAILED') {
+            modelFailureSaved = true;
+            throw new ApiError(
+              503,
+              'ANALYSIS503',
+              '이미지 분석을 수행할 수 없습니다.',
+            );
+          }
+        } else {
+          analysis = await this.repository.complete(analysis.id, result);
+        }
         return this.response(analysis);
       } catch (error) {
         const apiError =
@@ -83,7 +117,8 @@ export class AnalysisService {
             : new ApiError(500, 'COMMON500', '분석 요청 처리에 실패했습니다.');
         const body = apiError.getResponse() as { code: string };
         try {
-          await this.repository.fail(analysis.id, body.code);
+          if (!modelFailureSaved)
+            await this.repository.fail(analysis.id, body.code);
         } finally {
           if (reserved) await this.usage.releaseAiUsage(userId, analysis.id);
         }

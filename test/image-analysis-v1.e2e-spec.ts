@@ -112,7 +112,7 @@ describe('AI v1 known contract rules', () => {
   it('rejects generation localization', () => {
     expect(() =>
       validateAiImageResponseV1(
-        root({ ...model(), localization: { opaque: true } }),
+        root({ ...model(), localization: { opaque: true } as any }),
       ),
     ).toThrow();
   });
