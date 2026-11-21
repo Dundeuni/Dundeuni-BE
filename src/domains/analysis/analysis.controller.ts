@@ -17,10 +17,10 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-// TODO: 로그인 구현 후 AccessTokenGuard와 인증 사용자 ID를 복원한다.
-// import { UseGuards, Req } from '@nestjs/common';
-// import { ApiBearerAuth } from '@nestjs/swagger';
-// import { AccessTokenGuard, AuthenticatedRequest } from '../../common/auth/access-token.guard';
+import { UseGuards, Req } from '@nestjs/common';
+import { ApiBearerAuth } from '@nestjs/swagger';
+import { AuthenticatedRequest } from '../../common/auth/access-token.guard';
+import { RequestUserGuard } from '../../common/auth/request-user.guard';
 import { ApiErrorFilter } from '../../common/http/api-error';
 import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
@@ -40,9 +40,9 @@ function errorSchema(code: string) {
 
 @ApiExtraModels(ImageModelsPublicResultDto)
 @ApiTags('Analysis')
-// @ApiBearerAuth()
+@ApiBearerAuth()
 @Controller('analysis')
-// @UseGuards(AccessTokenGuard)
+@UseGuards(RequestUserGuard)
 @UseFilters(ApiErrorFilter)
 export class AnalysisController {
   constructor(private readonly service: AnalysisService) {}
@@ -53,7 +53,7 @@ export class AnalysisController {
   @ApiOperation({
     summary: '이미지 분석 요청 생성',
     description:
-      '요청 유형 SCREEN/IMAGE/TEXT 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. 실제 Provider 미연동 시 503.',
+      '요청 유형 SCREEN/IMAGE/TEXT 중 IMAGE만 지원합니다. 점수는 AI 생성·변조 가능성이며 사기 확률이 아닙니다. AI_PROVIDER=mock은 CuRe/TruFor v0.2 개발 전용 가상 분석이며, AI_PROVIDER=http은 Bearer 서비스 인증을 사용하는 내부 HTTP 어댑터입니다. 서버 설정으로만 전환합니다. 부분 실패는 성공 모델을 보존하며 202, 전체 실패/타임아웃은 503. 위험도 매핑 미확정 시 null.',
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -129,12 +129,12 @@ export class AnalysisController {
     status: 400,
     schema: errorSchema('COMMON400'),
     description:
-      'COMMON400: type/file 누락, 빈 파일, 손상 이미지, SCREEN/TEXT 또는 잘못된 요청',
+      'COMMON400: type/file 누락, 빈 파일, 손상 이미지, SCREEN/TEXT 또는 잘못된 요청, AI 입력 오류(400/422)',
   })
-  // @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
+  @ApiResponse({ status: 401, description: 'AUTH401: 인증 실패' })
   @ApiResponse({
     status: 413,
-    description: 'COMMON413: 이미지 크기 초과',
+    description: 'COMMON413: 업로드 또는 AI 전송 파일·본문 크기 초과',
     schema: errorSchema('COMMON413'),
   })
   @ApiResponse({
@@ -148,15 +148,15 @@ export class AnalysisController {
   })
   @ApiResponse({
     status: 503,
-    description: 'ANALYSIS503: Provider 미연동/장애',
+    description:
+      'ANALYSIS503: Provider 미연동, AI 서비스 인증/네트워크/타임아웃/비정상 응답/전체 모델 실패',
   })
   @ApiResponse({ status: 500, description: 'COMMON500: DB/내부 오류' })
   create(
-    // @Req() request: AuthenticatedRequest,
+    @Req() request: AuthenticatedRequest,
     @Body() _body: CreateAnalysisDto,
     @UploadedFile() file: Express.Multer.File | undefined,
   ) {
-    // return this.service.create(request.user.id, file);
-    return this.service.create('development-user', file);
+    return this.service.create(request.user.id, file);
   }
 }

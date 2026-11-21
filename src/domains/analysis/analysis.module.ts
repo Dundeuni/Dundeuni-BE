@@ -3,16 +3,16 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { AccessTokenGuard } from '../../common/auth/access-token.guard';
+import { RequestUserGuard } from '../../common/auth/request-user.guard';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AnalysisController } from './analysis.controller';
 import { AnalysisRepository } from './analysis.repository';
+import { selectImageAnalysisProvider } from './mock-image-analysis.provider';
 import { AnalysisService } from './analysis.service';
 import { AnalysisUsageService } from './analysis-usage.service';
 import {
   IMAGE_ANALYSIS_PROVIDER,
   ImageAnalysisService,
-  UnavailableImageAnalysisProvider,
 } from './image-analysis.service';
 
 @Module({
@@ -34,14 +34,15 @@ import {
   providers: [
     UploadedImageCleanupInterceptor,
     PrismaService,
-    AccessTokenGuard,
+    RequestUserGuard,
     AnalysisService,
     AnalysisRepository,
     AnalysisUsageService,
     ImageAnalysisService,
     {
       provide: IMAGE_ANALYSIS_PROVIDER,
-      useClass: UnavailableImageAnalysisProvider,
+      inject: [ConfigService],
+      useFactory: selectImageAnalysisProvider,
     },
   ],
 })
