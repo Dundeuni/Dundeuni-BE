@@ -70,8 +70,14 @@ export class ImageAnalysisService {
       const timeoutMs = Number(
         this.config.get<string>('AI_REQUEST_TIMEOUT_MS') ?? 30000,
       );
-      if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
-        throw new Error('Invalid AI timeout');
+      if (
+        !Number.isSafeInteger(timeoutMs) ||
+        timeoutMs <= 0 ||
+        timeoutMs > 2147483647
+      )
+        throw new Error(
+          'AI_REQUEST_TIMEOUT_MS must be an integer between 1 and 2147483647',
+        );
       const deadlineMs = request
         ? Date.parse(request.deadlineAt) - Date.now()
         : timeoutMs;

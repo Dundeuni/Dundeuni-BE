@@ -122,3 +122,35 @@ describe('Mock AI Provider', () => {
     ).rejects.toMatchObject({ status: 503 });
   });
 });
+
+describe('AI timeout boundaries', () => {
+  it.each(['1', '2147483647'])('accepts %s ms', async (value) => {
+    const config = new ConfigService({ AI_REQUEST_TIMEOUT_MS: value });
+    expect(() => selectImageAnalysisProvider(config)).not.toThrow();
+    const result = {
+      aiGenerationScore: 10,
+      aiRiskLevel: 'LOW',
+      reasons: [],
+      modelVersion: 'test',
+    };
+    await expect(
+      new ImageAnalysisService({ analyze: async () => result }, config).analyze(
+        file,
+      ),
+    ).resolves.toEqual(result);
+  });
+  it.each(['0', '-1', 'NaN', '', '1.5', '2147483648', '9007199254740991'])(
+    'rejects invalid timeout %s before provider execution',
+    async (value) => {
+      const config = new ConfigService({ AI_REQUEST_TIMEOUT_MS: value });
+      expect(() => selectImageAnalysisProvider(config)).toThrow(
+        'AI_REQUEST_TIMEOUT_MS',
+      );
+      const provider = { analyze: jest.fn() };
+      await expect(
+        new ImageAnalysisService(provider, config).analyze(file),
+      ).rejects.toMatchObject({ status: 503 });
+      expect(provider.analyze).not.toHaveBeenCalled();
+    },
+  );
+});
