@@ -15,6 +15,7 @@ import { extname } from 'node:path';
 import sharp = require('sharp');
 import { ApiError } from '../../common/http/api-error';
 import { AnalysisRepository } from './analysis.repository';
+import { PhotoSelectionMetadata } from './photo-selection.dto';
 import { AnalysisUsageService } from './analysis-usage.service';
 import { ImageAnalysisService } from './image-analysis.service';
 
@@ -28,7 +29,11 @@ export class AnalysisService {
     @Optional() private readonly summaries?: AnalysisSummaryRepository,
   ) {}
 
-  async create(userId: string, file: Express.Multer.File | undefined) {
+  async create(
+    userId: string,
+    file: Express.Multer.File | undefined,
+    photoSelection?: PhotoSelectionMetadata,
+  ) {
     try {
       if (!file || file.size === 0)
         throw new ApiError(400, 'COMMON400', '이미지 파일이 필요합니다.');
@@ -77,7 +82,9 @@ export class AnalysisService {
       const expiresAt = new Date(
         Date.now() + this.positiveConfig('ANALYSIS_RETENTION_SECONDS') * 1000,
       );
-      let analysis = await this.repository.create(userId, hash, expiresAt);
+      let analysis = photoSelection
+        ? await this.repository.create(userId, hash, expiresAt, photoSelection)
+        : await this.repository.create(userId, hash, expiresAt);
       let reserved = false;
       let modelFailureSaved = false;
       try {
@@ -100,7 +107,7 @@ export class AnalysisService {
         const result = await this.imageAnalysis.analyze(file, {
           file,
           analysisId: analysis.id,
-          elementId: randomUUID(),
+          elementId: photoSelection?.elementId ?? randomUUID(),
           requestId: randomUUID(),
           sourceType: 'IMAGE',
           models: 'ALL',
@@ -148,7 +155,7 @@ export class AnalysisService {
       );
     } finally {
       // 메모리 업로드만 사용한다. 응답/실패 경로 모두 원본 버퍼를 정리한다.
-      file?.buffer.fill(0);
+      if (Buffer.isBuffer(file?.buffer)) file.buffer.fill(0);
     }
   }
 
@@ -172,6 +179,7 @@ export class AnalysisService {
       message: '분석 결과 조회에 성공했습니다.',
       result: {
         ...this.response(row).result,
+        photoSelection: row.photoSelection ?? null,
         models:
           row.imageResultStatus === null
             ? null

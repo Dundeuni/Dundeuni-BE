@@ -11,6 +11,11 @@ import { finalize, Observable } from 'rxjs';
 export class UploadedImageCleanupInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const request = context.switchToHttp().getRequest<Request>();
-    return next.handle().pipe(finalize(() => request.file?.buffer.fill(0)));
+    return next.handle().pipe(
+      finalize(() => {
+        const buffer = request.file?.buffer;
+        if (Buffer.isBuffer(buffer)) buffer.fill(0);
+      }),
+    );
   }
 }

@@ -1,6 +1,14 @@
+const jwt = (sub = 'development-user') => {
+  const h = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString('base64url');
+  const p = Buffer.from(
+    JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + 3600 }),
+  ).toString('base64url');
+  return `${h}.${p}.${createHmac('sha256', 'photo-review-secret').update(`${h}.${p}`).digest('base64url')}`;
+};
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
+import { PhotoRegionDetector } from '../src/domains/analysis/photo-region.detector';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -63,7 +71,9 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     );
   }
   beforeAll(async () => {
-    connection = new URL(parse(readFileSync('.env')).DATABASE_URL);
+    connection = new URL(
+      process.env.V1_DB_URL ?? parse(readFileSync('.env')).DATABASE_URL,
+    );
     if (!['localhost', '127.0.0.1'].includes(connection.hostname))
       throw new Error('Local test database required');
     const migrations = readdirSync('prisma/migrations')
@@ -85,11 +95,16 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       .overrideProvider(ConfigService)
       .useValue(
         new ConfigService({
+          JWT_ACCESS_SECRET: 'photo-review-secret',
           ANALYSIS_MAX_FILE_BYTES: '1024',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '100',
         }),
       )
+      .overrideProvider(PhotoRegionDetector)
+      .useValue({
+        detect: async () => [{ left: 0, top: 0, width: 32, height: 32 }],
+      })
       .overrideProvider(PrismaService)
       .useValue(prisma)
       .overrideProvider(AnalysisUsageService)
@@ -105,6 +120,55 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     await app.init();
     await app.listen(0, '127.0.0.1');
   });
+  it.each(['original', 'region'])(
+    'persists selected %s source and retrieves it for its JWT owner only',
+    async (selection) => {
+      const image = PNG.sync.write(new PNG({ width: 64, height: 64 }));
+      const before = provider.analyze.mock.calls.length;
+      const uploaded = await request(app.getHttpServer())
+        .post('/api/analysis/image-uploads')
+        .set('Authorization', `Bearer ${jwt('photo-owner')}`)
+        .attach('file', image, 'screen.png')
+        .expect(201);
+      const u = uploaded.body.result;
+      expect(provider.analyze.mock.calls.length).toBe(before);
+      await request(app.getHttpServer())
+        .get(`/api/analysis/image-uploads/${u.uploadId}`)
+        .set('Authorization', `Bearer ${jwt('other')}`)
+        .expect(404);
+      const elementId =
+        selection === 'original'
+          ? u.original.elementId
+          : u.elements[0].elementId;
+      const analyzed = await request(app.getHttpServer())
+        .post(`/api/analysis/image-uploads/${u.uploadId}/analyses`)
+        .set('Authorization', `Bearer ${jwt('photo-owner')}`)
+        .send({ elementId })
+        .expect(202);
+      const id = analyzed.body.result.analysisId;
+      const stored = await prisma.analysis.findUniqueOrThrow({ where: { id } });
+      expect(stored.userId).toBe('photo-owner');
+      expect(stored.photoSelection).toMatchObject({
+        uploadId: u.uploadId,
+        elementId,
+        selectionType: selection === 'original' ? 'ORIGINAL' : 'PHOTO_REGION',
+      });
+      const detail = await request(app.getHttpServer())
+        .get(`/api/analysis/${id}`)
+        .set('Authorization', `Bearer ${jwt('photo-owner')}`)
+        .expect(200);
+      expect(detail.body.result.photoSelection).toEqual(stored.photoSelection);
+      await request(app.getHttpServer())
+        .get(`/api/analysis/${id}`)
+        .set('Authorization', `Bearer ${jwt('other')}`)
+        .expect(404);
+      await request(app.getHttpServer()).get(`/api/analysis/${id}`).expect(401);
+      await request(app.getHttpServer())
+        .get(`/api/analysis/image-uploads/${u.uploadId}`)
+        .set('Authorization', `Bearer ${jwt('photo-owner')}`)
+        .expect(404);
+    },
+  );
   afterAll(async () => {
     if (app) await app.close();
     if (prisma) await prisma.$disconnect();
@@ -238,6 +302,7 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     'TIMEOUT',
   ] as const)('runs real service→Mock→Prisma flow for %s', async (scenario) => {
     const config = new ConfigService({
+      JWT_ACCESS_SECRET: 'photo-review-secret',
       ANALYSIS_MAX_FILE_BYTES: '128',
       ANALYSIS_RETENTION_SECONDS: '86400',
       AI_REQUEST_TIMEOUT_MS: '30',
@@ -318,7 +383,10 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     expect(saved?.modelResults).toHaveLength(0);
   });
   it('v0.2 retry preserves successful CuRe, stores only allowed fields and reconstructs overall result', async () => {
-    const config = new ConfigService({ AI_REQUEST_TIMEOUT_MS: '1000' });
+    const config = new ConfigService({
+      JWT_ACCESS_SECRET: 'photo-review-secret',
+      AI_REQUEST_TIMEOUT_MS: '1000',
+    });
     const row = await repository.create(
       'retry-user',
       'hash',
@@ -520,6 +588,30 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
     expect(calculateOverallResult(generation, manipulation).decision).toBe(
       'GENERATION_OR_MANIPULATION_SUSPECTED',
     );
+  });
+  it('persists selected photo provenance and exposes it through detail lookup', async () => {
+    const selection = {
+      uploadId: randomUUID(),
+      elementId: randomUUID(),
+      bbox: { left: 10, top: 20, width: 100, height: 80 },
+      imageWidth: 400,
+      imageHeight: 300,
+      coordinateSpace: 'NORMALIZED_IMAGE' as const,
+      preprocessingVersion: 'gemini-photo-regions-v1',
+    };
+    const saved = await repository.create(
+      'development-user',
+      'selected-photo',
+      new Date(Date.now() + 60000),
+      selection,
+    );
+    const detail = await app
+      .get(AnalysisService)
+      .findOne('development-user', saved.id);
+    expect(detail.result.photoSelection).toEqual(selection);
+    expect(await repository.findWithModelResults(saved.id)).toMatchObject({
+      photoSelection: selection,
+    });
   });
   it('returns null from repository for a missing analysisId', async () => {
     expect(await repository.findWithModelResults(randomUUID())).toBeNull();

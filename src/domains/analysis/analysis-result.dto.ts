@@ -22,6 +22,13 @@ export class AnalysisOverallResultDto implements ImageOverallResult {
   uncertainKinds!: ImageOverallResult['uncertainKinds'];
 }
 export class AnalysisResultDto {
+  @ApiProperty({
+    type: Object,
+    nullable: true,
+    description:
+      '선택한 사진의 elementId, 업로드 ID, 정규화 좌표 및 전처리 버전. 기존 분석은 null.',
+  })
+  photoSelection!: unknown;
   @ApiProperty({ format: 'uuid' }) analysisId!: string;
   @ApiProperty({ enum: ['IMAGE', 'TEXT', 'URL'] }) type!: string;
   @ApiProperty({ enum: ['QUEUED', 'ANALYZING', 'COMPLETED', 'FAILED'] })
