@@ -14,9 +14,11 @@ export class RequestUserGuard extends AccessTokenGuard {
   override canActivate(context: ExecutionContext): boolean {
     if (
       process.env.NODE_ENV !== 'production' &&
-      this.environment.get<string>('NODE_ENV') === 'development'
+      this.environment.get<string>('NODE_ENV') === 'development' &&
+      !context.switchToHttp().getRequest<AuthenticatedRequest>().headers
+        .authorization
     ) {
-      // Development always uses one identity, including requests carrying a token.
+      // Only unauthenticated local development requests use the shared identity.
       const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
       request.user = { id: DEVELOPMENT_USER_ID };
       return true;

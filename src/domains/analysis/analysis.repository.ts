@@ -51,6 +51,7 @@ export class AnalysisRepository {
         type: true,
         status: true,
         textPreview: true,
+        textResult: true,
         createdAt: true,
         updatedAt: true,
         expiresAt: true,

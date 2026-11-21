@@ -695,3 +695,6 @@ HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사�
 ## Issue #15 최신 POST 계약
 
 [POST TEXT/OCR 계약](../API-POST-TEXT-OCR.md)을 참고하세요. 과거 기록의 OCR 공개 경로 미연결 설명은 당시 시점 기준이며 현재는 명시적 sourceType 계약으로 연결합니다.
+
+### OCR 인증 및 저장 조회 검증
+개발 환경에서도 Authorization을 전달하면 JWT를 검증하고 sub를 사용한다. 토큰 없는 development 요청에만 development-user를 적용하며 그 외 환경은 JWT 필수다. IMAGE와 TEXT 모두 같은 가드를 사용한다. findActiveTextForUser는 id·userId·TEXT·미만료 조건으로 textResult까지 조회한다. 이 브랜치에는 공개 GET 상세 API가 없어 저장 재조회는 Repository로 검증한다.

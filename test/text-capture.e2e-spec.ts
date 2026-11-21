@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
+import { AnalysisRepository } from '../src/domains/analysis/analysis.repository';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -21,6 +22,7 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
   const imageProvider = { analyze: jest.fn() };
   const settings: Record<string, string> = {
     NODE_ENV: 'development',
+    JWT_ACCESS_SECRET: 'capture-test-secret',
     TEXT_AI_PROVIDER: 'http',
     AI_PROVIDER: 'unavailable',
     AI_SERVICE_BASE_URL: 'http://127.0.0.1:9',
@@ -65,6 +67,7 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
   beforeEach(() => {
     rows = new Map();
     jest.clearAllMocks();
+    settings.NODE_ENV = 'development';
     settings.TEXT_AI_PROVIDER = 'http';
     settings.AI_REQUEST_TIMEOUT_MS = '1000';
     db.analysis.create.mockImplementation(async ({ data }) => {
@@ -151,6 +154,55 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
     if (key) call.set('Idempotency-Key', key);
     return call.attach('file', bytes ?? image, filename);
   };
+  const jwt = (sub: string) => {
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
+      'base64url',
+    );
+    const payload = Buffer.from(
+      JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + 3600 }),
+    ).toString('base64url');
+    return `${header}.${payload}.${createHmac('sha256', settings.JWT_ACCESS_SECRET).update(`${header}.${payload}`).digest('base64url')}`;
+  };
+  it.each(['IMAGE', 'TEXT'])(
+    'blocks unauthenticated %s requests outside development before AI',
+    async (type) => {
+      settings.NODE_ENV = 'production';
+      await request(app.getHttpServer())
+        .post('/api/analysis')
+        .send({ type, text: '검증용 텍스트입니다.' })
+        .expect(401);
+      expect(transport).not.toHaveBeenCalled();
+      expect(imageProvider.analyze).not.toHaveBeenCalled();
+    },
+  );
+  it('persists authenticated OCR metadata and retrieves it by analysisId and owner', async () => {
+    settings.NODE_ENV = 'production';
+    const response = await upload()
+      .set('Authorization', `Bearer ${jwt('alice')}`)
+      .expect(202);
+    const id = response.body.result.analysisId;
+    const repository = app.get(AnalysisRepository);
+    const saved = await repository.findActiveTextForUser(id, 'alice');
+    expect(saved).toMatchObject({
+      id,
+      userId: 'alice',
+      textResult: response.body.result.textResult,
+    });
+    expect(saved!.textResult).toMatchObject({
+      sourceType: 'SCREEN_CROP',
+      quality: { ocrUsed: true },
+    });
+    expect(await repository.findActiveTextForUser(id, 'bob')).toBeNull();
+    rows.get(id)!.expiresAt = new Date(0);
+    expect(await repository.findActiveTextForUser(id, 'alice')).toBeNull();
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it('uses a supplied JWT subject in development instead of the shared identity', async () => {
+    const response = await upload()
+      .set('Authorization', `Bearer ${jwt('alice')}`)
+      .expect(202);
+    expect(rows.get(response.body.result.analysisId)!.userId).toBe('alice');
+  });
   it('sends direct text as JSON to the same text/OCR server without image inference', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/analysis')

@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -23,6 +23,7 @@ dbDescribe(
     const usage = { reserveAiUsage: jest.fn(), releaseAiUsage: jest.fn() };
     const config = new ConfigService({
       NODE_ENV: 'development',
+      JWT_ACCESS_SECRET: 'postgres-ocr-test-secret',
       TEXT_AI_PROVIDER: 'http',
       AI_SERVICE_BASE_URL: 'http://127.0.0.1:9',
       AI_SERVICE_TOKEN: 'test-only-token',
@@ -63,6 +64,7 @@ dbDescribe(
       await app.listen(0, '127.0.0.1');
     });
     beforeEach(() => {
+      config.set('NODE_ENV', 'development');
       config.set('AI_REQUEST_TIMEOUT_MS', '1000');
       jest.clearAllMocks();
       transport = jest
@@ -78,6 +80,17 @@ dbDescribe(
       await prisma?.$disconnect();
     });
     it('persists explicit SCREEN_CROP via public POST with real PostgreSQL', async () => {
+      config.set('NODE_ENV', 'production');
+      const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
+        'base64url',
+      );
+      const payload = Buffer.from(
+        JSON.stringify({
+          sub: 'ocr-owner',
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        }),
+      ).toString('base64url');
+      const jwt = `${header}.${payload}.${createHmac('sha256', 'postgres-ocr-test-secret').update(`${header}.${payload}`).digest('base64url')}`;
       const bytes = await sharp({
         create: { width: 4, height: 4, channels: 3, background: 'white' },
       })
@@ -96,6 +109,7 @@ dbDescribe(
       });
       const response = await request(app.getHttpServer())
         .post('/api/analysis')
+        .set('Authorization', `Bearer ${jwt}`)
         .field('type', 'TEXT')
         .field('sourceType', 'SCREEN_CROP')
         .attach('file', bytes, 'capture.png')
@@ -110,6 +124,23 @@ dbDescribe(
         textPreview: '',
         textResult: { sourceType: 'SCREEN_CROP', riskScore: 0.82 },
       });
+      expect(row.userId).toBe('ocr-owner');
+      const repository = app.get(AnalysisRepository);
+      const stored = await repository.findActiveTextForUser(
+        row.id,
+        'ocr-owner',
+      );
+      expect(stored!.textResult).toEqual(response.body.result.textResult);
+      expect(
+        await repository.findActiveTextForUser(row.id, 'other-user'),
+      ).toBeNull();
+      expect(
+        await repository.findActiveTextForUser(
+          row.id,
+          'ocr-owner',
+          row.expiresAt,
+        ),
+      ).toBeNull();
       expect(row.modelResults).toEqual([]);
       expect(JSON.stringify(row)).not.toContain('private original');
       expect(image.analyze).not.toHaveBeenCalled();

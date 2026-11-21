@@ -204,6 +204,7 @@ describe('TEXT analysis JSON API with real Service/Repository and mocked Prisma 
         type: true,
         status: true,
         textPreview: true,
+        textResult: true,
         createdAt: true,
         updatedAt: true,
         expiresAt: true,

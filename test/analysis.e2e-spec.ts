@@ -283,13 +283,13 @@ describe('IMAGE analysis API', () => {
     await upload().expect(202);
     expect([...rows.values()][0].userId).toBe('development-user');
   });
-  it('temporarily ignores invalid access tokens', async () => {
+  it('rejects invalid access tokens even in development', async () => {
     await post()
       .set('Authorization', 'Bearer invalid')
       .field('type', 'IMAGE')
       .attach('file', png(), 'sample.png')
-      .expect(202);
-    expect([...rows.values()][0].userId).toBe('development-user');
+      .expect(401);
+    expect(provider.analyze).not.toHaveBeenCalled();
   });
   it('creates a fresh analysis for each request without a key', async () => {
     const first = await upload().expect(202);
