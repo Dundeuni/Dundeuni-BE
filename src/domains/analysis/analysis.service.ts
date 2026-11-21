@@ -96,6 +96,26 @@ export class AnalysisService {
             'COMMON409',
             '만료된 분석 요청입니다. 새 멱등성 키를 사용해 주세요.',
           );
+        const timeoutMs = Number(
+          this.config.get<string>('AI_REQUEST_TIMEOUT_MS') ?? 30000,
+        );
+        if (
+          !Number.isSafeInteger(timeoutMs) ||
+          timeoutMs <= 0 ||
+          timeoutMs > 2147483647
+        )
+          throw new ApiError(
+            500,
+            'COMMON500',
+            'AI 제한 시간 설정이 올바르지 않습니다.',
+          );
+        // Includes a minute for DB/usage work in addition to the bounded AI request.
+        const cutoff = new Date(Date.now() - timeoutMs - 60000);
+        if (
+          ['QUEUED', 'ANALYZING'].includes(analysis.status) &&
+          analysis.createdAt <= cutoff
+        )
+          analysis = await this.repository.terminateStale(analysis.id, cutoff);
         if (analysis.status === 'COMPLETED') return this.response(analysis);
         if (analysis.status === 'FAILED') {
           const statuses: Record<string, number> = {

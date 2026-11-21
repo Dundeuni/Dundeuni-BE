@@ -73,6 +73,20 @@ describe('IMAGE analysis API', () => {
         return { analysis: await pending, claimed: true };
       },
     ),
+    terminateStale: jest.fn(async (id: string, cutoff: Date) => {
+      const row = rows.get(id)!;
+      if (
+        ['QUEUED', 'ANALYZING'].includes(row.status) &&
+        row.createdAt <= cutoff &&
+        !row.errorCode
+      )
+        update(id, {
+          status: 'FAILED',
+          errorCode: 'ANALYSIS503',
+          completedAt: new Date(),
+        });
+      return row;
+    }),
     analyzing: jest.fn(async (id: string) =>
       update(id, { status: 'ANALYZING' }),
     ),
@@ -233,6 +247,27 @@ describe('IMAGE analysis API', () => {
       .expect(202);
     expect([...rows.values()][0].userId).toBe('development-user');
   });
+  it.each(['QUEUED', 'ANALYZING'] as const)(
+    'terminates an abandoned %s claim without another AI call',
+    async (status) => {
+      const first = await keyedUpload('abandoned').expect(202);
+      const row = rows.get(first.body.result.analysisId)!;
+      Object.assign(row, {
+        status,
+        completedAt: null,
+        createdAt: new Date(Date.now() - 120000),
+      });
+      provider.analyze.mockClear();
+      const responses = await Promise.all([
+        keyedUpload('abandoned'),
+        keyedUpload('abandoned'),
+      ]);
+      expect(responses.map((r) => r.status)).toEqual([503, 503]);
+      expect(row).toMatchObject({ status: 'FAILED', errorCode: 'ANALYSIS503' });
+      expect(provider.analyze).not.toHaveBeenCalled();
+      expect(usage.reserveAiUsage).toHaveBeenCalledTimes(1);
+    },
+  );
   it('creates a fresh analysis for each request without a key', async () => {
     const first = await upload().expect(202);
     const second = await upload().expect(202);
