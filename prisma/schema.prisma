@@ -72,6 +72,7 @@ model Analysis {
   summaryModel      String?
   summarizedAt      DateTime?
 
+  @@index([expiresAt, id])
   @@map("analysis_requests")
 }
 

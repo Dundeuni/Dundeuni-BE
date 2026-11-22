@@ -6,8 +6,8 @@ AI 생성·변조 가능성과 사기 위험은 하나의 점수로 합치지 �
 
 ## POST /api/analysis — IMAGE
 
-로그인 미구현으로 AccessTokenGuard를 임시 주석 처리했다. Authorization 헤더 없이 요청할 수 있다.
-모든 요청은 임시 사용자 `development-user`로 저장한다. 로그인 구현 후 Guard와 인증 사용자 ID를 복원한다.
+기존 AccessTokenGuard로 JWT Bearer를 검증하며 개발 환경에서도 인증이 필요하다.
+JWT sub를 userId로 저장하므로 생성한 사용자가 자신의 검사 기록을 조회할 수 있다.
 
 요청은 `multipart/form-data`이며 필드는 `type=IMAGE`, `file`이다.
 DB `AnalysisType`은 IMAGE/TEXT/URL을 유지하며 SCREEN/TEXT 및 기존 URL 요청은 현재 400으로 거부한다.
@@ -18,6 +18,7 @@ MIME, 확장자, 파일 시그니처 및 크기를 확인한 후 sharp로 픽셀
 
 ```bash
 curl -X POST http://localhost:3000/api/analysis \
+  -H 'Authorization: Bearer <JWT>' \
   -F 'type=IMAGE' -F 'file=@sample.png'
 ```
 
@@ -72,6 +73,7 @@ Analysis Controller에만 필터를 적용해 기존 Health 응답은 유지한�
 | HTTP | code        | 상황                                                |
 | ---- | ----------- | --------------------------------------------------- |
 | 400  | COMMON400   | type/file 누락, 빈/손상 이미지, IMAGE 이외의 type, 잘못된 multipart |
+| 401  | AUTH401     | JWT 누락·무효·만료                                  |
 | 413  | COMMON413   | 크기 초과                                           |
 | 415  | COMMON415   | MIME/확장자/시그니처 불일치                         |
 | 429  | USAGE429    | 이용량 초과 (Usage 연동 후 실제 적용)               |
@@ -88,10 +90,10 @@ IMAGE 유형+MIME+이미지 바이트 SHA-256을 requestHash로 저장하지만 
 
 원본 이미지와 파일 이름은 DB/디스크에 저장하지 않는다. 메모리 버퍼는 성공·실패·검증 실패 후 정리한다.
 검증 이전 multer 거부 시 버퍼는 요청 종료 후 해제된다. 이미지/토큰/민감정보를 로그에 출력하지 않는다.
-현재 userId는 임시 값 `development-user`로 저장하며 Auth/User 연동 후 인증 사용자 ID와 FK를 연결한다.
+userId는 JWT sub로 저장한다. 현재 User 테이블/FK 연동은 별도 범위다.
 분석 근거는 최소 데이터로 JSON에 저장하며 실제 Provider가 원본 개인정보를 근거에 재출력하지 않도록 계약을 확정해야 한다.
-`ANALYSIS_RETENTION_SECONDS`로 expiresAt을 기록한다. 개발 예시 24시간은 확정 정책이 아니다.
-자동 삭제, 기록 저장 동의은 미구현이며 운영 전 확정이 필요하다. expiresAt 경과 자체가 재분석/차감을 유발하지 않는다.
+`ANALYSIS_RETENTION_SECONDS`로 신규 IMAGE의 expiresAt을 기록하며 최대 30일(2592000초)로 제한한다. 더 짧은 설정은 유지한다.
+서버 시작 시 및 기본 1분마다 만료 기록을 최대 500건씩 실제 삭제한다. 상세는 `analysis-expiry.md`를 참고한다. 기록 저장 동의 정책은 별도이며, 만료나 삭제가 재분석/차감을 유발하지 않는다.
 
 ### 연동 TODO
 
@@ -122,7 +124,7 @@ API 통합 테스트는 Nest/multipart/Swagger를 실제 실행하고 Repository
 대상 내부 엔드포인트는 `POST /internal/v1/image-analyses`이다. 실제 HTTP 호출은 아직 구현하지 않았다.
 `image-analysis-v1.dto.ts`에 AI wire 타입과 BE 공개 projection 타입을 분리하고,
 `ImageAnalysisService.validateV1Response`에 알려진 계약 규칙 검증 진입점을 마련했다.
-기존 `POST /api/analysis` 요청·응답·HTTP 상태·파일 검증·인증 임시 비활성화 상태는 유지한다.
+기존 `POST /api/analysis` 요청·응답·파일 검증 규약을 유지한다. IMAGE 기록 연동에서는 JWT 인증과 인증 사용자 ID 저장을 적용한다.
 GET 상세 조회는 기존에도 미구현이며 이번 작업에서도 추가하지 않는다. 멱등성 키는 이전 제거 상태를 유지한다.
 Swagger components에 새 projection을 등록했지만 현재 POST 응답에 이를 추가하지 않는다.
 
@@ -137,7 +139,7 @@ Swagger components에 새 projection을 등록했지만 현재 POST 응답에 �
 - 모델별 상태/정수 표시 점수/판정/근거/한계/모델·정책 버전/오류 코드/nullable retryable 저장.
 - 별도 테이블을 선택한 이유: 모델별 독립 갱신, UNIQUE/FK/점수 CHECK 및 트랜잭션 무결성을 적용하기 위해서다. 근거는 기존 BE description 배열을 JSON으로 저장한다.
 - rawScore, analysisImage, 원본/crop, localization PNG/base64, error 원문은 신규 저장 whitelist에서 제외한다.
-- requestHash/expiresAt 및 원본 버퍼 정리 정책은 유지한다. 자동 TTL 삭제는 기존에도 미구현이다.
+- requestHash/expiresAt 및 원본 버퍼 정리 정책은 유지한다. 만료 데이터의 실제 삭제는 새 정리 작업이 담당한다(`analysis-expiry.md`).
 
 ### Repository 재사용 메서드
 

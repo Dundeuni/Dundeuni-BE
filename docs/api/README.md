@@ -6,4 +6,8 @@
 
 - `auth-user.md`: 인증, 사용자 프로필, 서비스 설정
 - `analysis.md`: 이미지·텍스트·URL 검사 요청과 결과
+- `analysis-history.md`: 검사 기록 공통 목록·상세·개별/전체 삭제
+- `analysis-history-image.md`: IMAGE/SCREEN의 저장 Gemini 요약 조회 및 선행 생성 기능 의존성
 - `safety-guide.md`: 위험 단계별 대응 가이드
+
+- `analysis-expiry.md`: 최대 30일 보관 및 만료 기록의 주기적 실제 삭제
