@@ -22,7 +22,7 @@ export class AnalysisHistoryDetailDto {
     nullable: true,
     additionalProperties: true,
     description:
-      '유형별 상세 계약은 후속 기능 브랜치에서 확장합니다. 현재는 null입니다.',
+      'TEXT는 저장된 textPreview(최대 200자), decision, riskScore, scoreMeaning, modelVersion, policyVersion, needsReview만 반환합니다. 다른 유형은 null입니다.',
   })
   detail!: Record<string, unknown> | null;
 }
