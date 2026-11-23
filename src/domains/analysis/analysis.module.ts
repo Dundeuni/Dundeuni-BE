@@ -1,3 +1,7 @@
+import { AnalysisHistoryController } from './analysis-history.controller';
+import { AnalysisHistoryService } from './analysis-history.service';
+import { AnalysisHistoryRepository } from './analysis-history.repository';
+import { AccessTokenGuard } from '../../common/auth/access-token.guard';
 import { UploadedImageCleanupInterceptor } from './uploaded-image-cleanup.interceptor';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -35,8 +39,11 @@ import {
       },
     }),
   ],
-  controllers: [AnalysisController],
+  controllers: [AnalysisController, AnalysisHistoryController],
   providers: [
+    AnalysisHistoryService,
+    AnalysisHistoryRepository,
+    AccessTokenGuard,
     UploadedImageCleanupInterceptor,
     PrismaService,
     RequestUserGuard,
