@@ -6,4 +6,8 @@
 
 - `auth-user.md`: 인증, 사용자 프로필, 서비스 설정
 - `analysis.md`: 이미지·텍스트·URL 검사 요청과 결과
+- `analysis-history.md`: 검사 기록 공통 목록·상세·개별/전체 삭제
 - `safety-guide.md`: 위험 단계별 대응 가이드
+
+- `phone-analysis.md`: 기존 APICK 전화번호 분석 요청
+- `analysis-history-phone.md`: PHONE 마스킹 기록 목록·상세·저장 및 의존성
