@@ -42,6 +42,8 @@ describe('stored image/screenshot summary projection', () => {
       expect(service.project({ ...stored, summary })).toMatchObject({
         summary: null,
         summaryStatus: 'COMPLETED',
+        summaryModel: null,
+        summarizedAt: null,
       });
     },
   );
