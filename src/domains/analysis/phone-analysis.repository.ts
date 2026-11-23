@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ApickPhoneResult } from './apick-phone.provider';
@@ -29,7 +28,6 @@ export class PhoneAnalysisRepository {
     risk: ReturnType<PhoneRiskService['assess']>,
   ) {
     const analyzedAt = new Date();
-    const { rawData, ...normalizedData } = data;
     return this.prisma.analysis.update({
       where: { id },
       data: {
@@ -45,8 +43,6 @@ export class PhoneAnalysisRepository {
             reportCountRaw: data.reportCountRaw,
             cyberCrime: data.cyberCrime,
             analyzedAt,
-            rawData: rawData as Prisma.InputJsonValue,
-            normalizedData: normalizedData as unknown as Prisma.InputJsonValue,
           },
         },
       },
