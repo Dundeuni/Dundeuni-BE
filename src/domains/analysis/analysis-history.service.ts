@@ -29,7 +29,7 @@ export class AnalysisHistoryService {
       items: rows.map((row) => ({
         analysisId: row.id,
         type: row.type,
-        targetSummary: null,
+        targetSummary: row.type === 'TEXT' ? row.textPreview?.slice(0, 200) ?? null : null,
         status: row.status,
         aiRiskLevel: row.aiRiskLevel,
         createdAt: row.createdAt.toISOString(),
@@ -92,7 +92,32 @@ export class AnalysisHistoryService {
             : [],
       createdAt: row.createdAt.toISOString(),
       completedAt: row.completedAt?.toISOString() ?? null,
-      detail: null,
+      detail: row.type === 'TEXT' ? this.textDetail(row) : null,
+    };
+  }
+
+  /** Only the stored, allowlisted risk fields are returned; never replay arbitrary AI JSON. */
+  private textDetail(row: StoredHistory) {
+    const value = row.textResult;
+    const data = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown> : {};
+    const decision = ['normal', 'phishing', 'defer'].includes(data.decision as string)
+      ? data.decision as string : null;
+    const riskScore = typeof data.riskScore === 'number' &&
+      Number.isFinite(data.riskScore) && data.riskScore >= 0 && data.riskScore <= 1
+      ? data.riskScore : null;
+    return {
+      textPreview: row.textPreview?.slice(0, 200) ?? null,
+      decision,
+      riskScore,
+      scoreMeaning: data.scoreMeaning === 'UNCALIBRATED_CLASSIFIER_SCORE'
+        ? 'UNCALIBRATED_CLASSIFIER_SCORE' : null,
+      modelVersion: typeof data.modelVersion === 'string' ? data.modelVersion : null,
+      policyVersion: typeof data.policyVersion === 'string' ? data.policyVersion : null,
+      needsReview: data.quality && typeof data.quality === 'object' &&
+        !Array.isArray(data.quality) &&
+        typeof (data.quality as Record<string, unknown>).needsReview === 'boolean'
+        ? (data.quality as Record<string, boolean>).needsReview : null,
     };
   }
 
