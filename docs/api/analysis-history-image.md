@@ -55,7 +55,7 @@ PENDING/FAILED/null, 빈 요약이면 targetSummary=null이다. 사용자 소유
 }
 ```
 
-미완료 상태는 다음과 같다. 상태는 DB 값 그대로이며 자동 복구·생성·재시도를 하지 않는다.
+미완료 상태는 다음과 같다. 상태는 DB 값 그대로이며 자동 복구·생성·재시도를 하지 않는다. `COMPLETED`라도 요약 문자열이 `null`·빈 문자열·공백뿐이면 `summary`, `summaryModel`, `summarizedAt`은 모두 `null`로 반환한다.
 
 ```json
 {"summary":null,"summaryStatus":"PENDING","summaryModel":null,"summarizedAt":null}
@@ -89,4 +89,4 @@ V1_DB_TEST=1 V1_DB_URL=postgresql://test_user@127.0.0.1:55440/history_test_20261
 npm run test:e2e -- --runInBand
 ```
 
-추가 요청으로 만료 기록 자동 삭제와 신규 IMAGE의 최대 30일 보관을 적용했다. 만료 정리용 expiresAt/id 인덱스 migration이 추가되었으며 컬럼·Enum 변경은 없다. 자세한 내용은 `analysis-expiry.md`를 참고한다. 커밋·푸시·머지·PR 생성은 수행하지 않는다.
+별도 보관 정책 작업으로 만료 기록 자동 삭제와 신규 IMAGE의 최대 30일 보관이 같은 브랜치에 포함되어 있다. 이 변경은 #26의 핵심 조회 기능과 별개이므로 후속 통합 시 독립 검토가 필요하다. 만료 정리용 expiresAt/id 인덱스 migration이 추가되었으며 컬럼·Enum 변경은 없다. 자세한 내용은 `analysis-expiry.md`를 참고한다. 이 브랜치의 후속 수정은 개별 커밋으로 반영되었으며, dev/main 머지는 수행하지 않았다.
