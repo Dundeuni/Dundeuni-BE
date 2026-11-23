@@ -9,6 +9,7 @@ const listSelect = {
   status: true,
   aiRiskLevel: true,
   createdAt: true,
+  textPreview: true,
 } satisfies Prisma.AnalysisSelect;
 const historySelect = {
   id: true,
@@ -19,6 +20,8 @@ const historySelect = {
   reasons: true,
   createdAt: true,
   completedAt: true,
+  textPreview: true,
+  textResult: true,
 } satisfies Prisma.AnalysisSelect;
 export type StoredHistory = Prisma.AnalysisGetPayload<{
   select: typeof historySelect;
