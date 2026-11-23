@@ -18,11 +18,12 @@ export class ImageHistorySummaryService {
 
   project(row: StoredImageSummary): ImageHistorySummaryDto {
     const completed = row.summaryStatus === 'COMPLETED';
+    const hasSummary = completed && Boolean(row.summary?.trim());
     return {
-      summary: completed && row.summary?.trim() ? row.summary : null,
+      summary: hasSummary ? row.summary : null,
       summaryStatus: row.summaryStatus,
-      summaryModel: completed ? row.summaryModel : null,
-      summarizedAt: completed
+      summaryModel: hasSummary ? row.summaryModel : null,
+      summarizedAt: hasSummary
         ? (row.summarizedAt?.toISOString() ?? null)
         : null,
     };
