@@ -94,6 +94,8 @@ dbDescribe('PHONE create/history HTTP→Prisma→isolated PostgreSQL', () => {
         reportCount: 1000,
       },
     });
+    expect(before.phoneResult?.rawData).toBeNull();
+    expect(before.phoneResult?.normalizedData).toBeNull();
     expect(before.expiresAt.getTime() - before.createdAt.getTime()).toBeCloseTo(
       30 * 86400000,
       -2,
