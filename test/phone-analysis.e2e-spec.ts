@@ -204,10 +204,15 @@ describe('PB-04 phone analysis (mock HTTP and DB)', () => {
       reportCount: 1000,
       reportCountRaw: '1000+',
       riskLevel: 'DANGER',
-      normalizedData: {
-        reportCountIsRange: true,
-        registeredDate: '2024-06-18',
-      },
+    });
+    const persisted = update.mock.calls[0][0].data.phoneResult.update;
+    expect(persisted).not.toHaveProperty('rawData');
+    expect(persisted).not.toHaveProperty('normalizedData');
+    expect(JSON.stringify(persisted)).not.toMatch(/01012345678|mock-key/);
+    expect(persisted).toMatchObject({
+      reportCount: 1000,
+      reportCountRaw: '1000+',
+      riskLevel: 'DANGER',
     });
   });
   test.each([{}, { spam: null, spam_count: null }, { spam_count: 2 }])(
