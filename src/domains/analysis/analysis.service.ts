@@ -66,7 +66,7 @@ export class AnalysisService {
         .update(file.buffer)
         .digest('hex');
       const expiresAt = analysisExpiresAt(
-        this.positiveConfig('ANALYSIS_RETENTION_SECONDS'),
+        Math.min(this.positiveConfig('ANALYSIS_RETENTION_SECONDS'), 604800),
       );
       let analysis = await this.repository.create(userId, hash, expiresAt);
       let reserved = false;
