@@ -11,8 +11,7 @@ class DetailedReasonDto extends ActionGuideDto {
   type!: 'GENERATION' | 'MANIPULATION';
 }
 
-class AnalysisSummaryResultDto {
-  @ApiProperty({ format: 'uuid' }) analysisId!: string;
+export class AnalysisSummaryFieldsDto {
   @ApiProperty({ enum: AnalysisSummaryStatus, nullable: true })
   summaryStatus!: AnalysisSummaryStatus | null;
   @ApiProperty({ type: String, nullable: true }) summary!: string | null;
@@ -24,6 +23,10 @@ class AnalysisSummaryResultDto {
   @ApiProperty({ type: String, nullable: true }) summaryModel!: string | null;
   @ApiProperty({ type: String, nullable: true, format: 'date-time' })
   summarizedAt!: string | null;
+}
+
+class AnalysisSummaryResultDto extends AnalysisSummaryFieldsDto {
+  @ApiProperty({ format: 'uuid' }) analysisId!: string;
 }
 
 export class AnalysisSummaryResponseDto {
