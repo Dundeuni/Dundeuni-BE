@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { AnalysisSummaryFieldsDto } from './analysis-summary.dto';
 import {
   ImageModelsPublicResultDto,
   ImageOverallResult,
@@ -26,7 +27,7 @@ export class AnalysisOverallResultDto implements ImageOverallResult {
   @ApiProperty({ type: [String] })
   uncertainKinds!: ImageOverallResult['uncertainKinds'];
 }
-export class AnalysisResultDto {
+export class AnalysisResultDto extends AnalysisSummaryFieldsDto {
   @ApiProperty({ type: Object, nullable: true }) textResult!: unknown;
   @ApiProperty({ nullable: true }) textPreview!: string | null;
   @ApiProperty({
