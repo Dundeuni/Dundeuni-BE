@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 export const textWire = (
   analysisId: string,
@@ -30,3 +31,19 @@ export const textWire = (
   limitations: ['private original limitation'],
   processingMs: 12,
 });
+
+export const textTestSecret = 'text-fixture-secret';
+
+export function textTestAuthorization(
+  secret = textTestSecret,
+  sub = 'development-user',
+) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
+    'base64url',
+  );
+  const claims = Buffer.from(
+    JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + 3600 }),
+  ).toString('base64url');
+  const body = `${header}.${claims}`;
+  return `Bearer ${body}.${createHmac('sha256', secret).update(body).digest('base64url')}`;
+}

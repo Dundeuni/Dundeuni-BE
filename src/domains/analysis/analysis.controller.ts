@@ -18,12 +18,17 @@ import {
   ApiBody,
   ApiHeader,
   ApiExtraModels,
+  getSchemaPath,
   ApiConsumes,
   ApiOperation,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { ApiError, ApiErrorFilter } from '../../common/http/api-error';
+import {
+  ExtractedPhoneNumberDto,
+  MAX_EXTRACTED_PHONE_NUMBERS,
+} from './phone-number-extraction.service';
 import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
 import { AnalysisService } from './analysis.service';
@@ -40,7 +45,7 @@ function errorSchema(code: string) {
   };
 }
 
-@ApiExtraModels(ImageModelsPublicResultDto)
+@ApiExtraModels(ImageModelsPublicResultDto, ExtractedPhoneNumberDto)
 @ApiTags('Analysis')
 @ApiBearerAuth()
 @Controller('analysis')
@@ -55,7 +60,7 @@ export class AnalysisController {
   @ApiOperation({
     summary: '이미지 또는 텍스트 분석 요청 생성',
     description:
-      'NODE_ENV=development에서만 인증을 우회하여 development-user로 저장합니다. production 및 그 외 환경은 JWT Bearer 필수이며 JWT sub로 저장합니다. IMAGE는 기존 multipart/form-data이며 부분 실패 202, 전체 실패/타임아웃 503입니다. TEXT 직접 입력은 application/json, 문자 캡처 OCR은 multipart/form-data의 type=TEXT, sourceType=SCREEN_CROP, file입니다. JSON TEXT는 sourceType=DIRECT 또는 생략을 지원합니다. 기본 모드는 AI 호출 없이 QUEUED/202이며 TEXT_AI_PROVIDER=http일 때 동기 AI 처리 후 202를 유지합니다. TEXT는 trim 후 5~3,000자, 미리보기 최대 200자만 보관하며 생성 후 30일 만료입니다. 원문은 저장하지 않습니다. URL은 미지원입니다.',
+      'TEXT·OCR은 모든 환경에서 JWT Bearer 필수이며 JWT sub로 저장합니다. IMAGE는 기존 개발용 인증 정책을 따릅니다. IMAGE는 기존 multipart/form-data이며 부분 실패 202, 전체 실패/타임아웃 503입니다. TEXT 직접 입력은 application/json, 문자 캡처 OCR은 multipart/form-data의 type=TEXT, sourceType=SCREEN_CROP, file입니다. JSON TEXT는 sourceType=DIRECT 또는 생략을 지원합니다. 기본 모드는 AI 호출 없이 QUEUED/202이며 TEXT_AI_PROVIDER=http일 때 동기 AI 처리 후 202를 유지합니다. TEXT는 trim 후 5~3,000자, 미리보기 최대 200자만 보관하며 생성 후 30일 만료입니다. 원문은 저장하지 않습니다. URL은 미지원입니다.',
   })
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiHeader({
@@ -159,6 +164,13 @@ export class AnalysisController {
                 processingMs: { type: 'number', minimum: 0 },
               },
             },
+            extractedPhoneNumbers: {
+              type: 'array',
+              maxItems: MAX_EXTRACTED_PHONE_NUMBERS,
+              items: { $ref: getSchemaPath(ExtractedPhoneNumberDto) },
+              description:
+                'TEXT·OCR 최초 응답에만 발견 순서대로 반환하는 정규화 번호. 미검출 또는 OCR 완료 재응답은 빈 배열. 직접 TEXT 재응답은 입력에서 재추출합니다. 추출 시 APICK을 호출하지 않습니다.',
+            },
             textPreview: {
               type: 'string',
               maxLength: 200,
@@ -178,7 +190,7 @@ export class AnalysisController {
   })
   @ApiResponse({
     status: 401,
-    description: 'AUTH401: 개발 환경 외 토큰 없음/무효',
+    description: 'AUTH401: TEXT/OCR 또는 개발 환경 외 IMAGE의 토큰 누락·무효',
     schema: errorSchema('AUTH401'),
   })
   @ApiResponse({
@@ -209,6 +221,10 @@ export class AnalysisController {
     const idempotencyKey = request.get('idempotency-key');
     const contentType = request.get('content-type');
     if (body.type === 'TEXT') {
+      // RequestUserGuard validates every supplied token. TEXT cannot use its IMAGE development fallback.
+      if (!request.headers.authorization)
+        throw new ApiError(401, 'AUTH401', 'Access Token이 필요합니다.');
+      request.res?.setHeader('Cache-Control', 'no-store');
       if (body.sourceType === 'SCREEN_CROP') {
         if (
           !file ||

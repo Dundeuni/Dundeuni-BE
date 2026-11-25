@@ -1,3 +1,4 @@
+import { textTestAuthorization, textTestSecret } from './fixtures/text-risk';
 import { configureAnalysisSwagger } from '../src/domains/analysis/analysis.swagger';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -26,6 +27,8 @@ describe('TEXT analysis JSON API with real Service/Repository and mocked Prisma 
       .useValue(
         new ConfigService({
           NODE_ENV: 'development',
+          JWT_ACCESS_SECRET: textTestSecret,
+          TEXT_AI_PROVIDER: 'disabled',
           ANALYSIS_MAX_FILE_BYTES: '100000',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '100',
@@ -71,7 +74,25 @@ describe('TEXT analysis JSON API with real Service/Repository and mocked Prisma 
   const post = (text: unknown) =>
     request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', textTestAuthorization())
       .send({ type: 'TEXT', text });
+
+  it('returns numbers on the QUEUED path without storing the extracted list', async () => {
+    const response = await post('가'.repeat(200) + ' 010-1234-5678').expect(
+      202,
+    );
+    expect(response.body.result.extractedPhoneNumbers).toEqual([
+      {
+        phoneNumber: '01012345678',
+        displayNumber: '010-1234-5678',
+        source: 'TEXT',
+      },
+    ]);
+    expect(JSON.stringify(rows)).not.toMatch(
+      /extractedPhoneNumbers|01012345678|010-1234-5678/,
+    );
+    expect(ai.analyze).not.toHaveBeenCalled();
+  });
 
   it.each([5, 3000])(
     'accepts %i characters and persists QUEUED without AI/Usage',
@@ -166,11 +187,13 @@ describe('TEXT analysis JSON API with real Service/Repository and mocked Prisma 
   it('rejects multipart TEXT and TEXT idempotency keys before persistence', async () => {
     await request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', textTestAuthorization())
       .field('type', 'TEXT')
       .field('text', 'abcde')
       .expect(400);
     await request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', textTestAuthorization())
       .set('Idempotency-Key', 'text-key')
       .send({ type: 'TEXT', text: 'abcde' })
       .expect(400);

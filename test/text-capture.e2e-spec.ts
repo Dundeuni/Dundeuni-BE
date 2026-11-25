@@ -130,13 +130,14 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
     });
     transport.mockImplementation(async (_url, options: RequestInit) => {
       if (options.body instanceof FormData)
-        return Response.json(
-          textWire(
+        return Response.json({
+          ...textWire(
             String(options.body.get('analysisId')),
             String(options.body.get('elementId')),
             'SCREEN_CROP',
           ),
-        );
+          text: 'private original 010-1234-5678, (02) 123-4567, +82 10 1234 5678',
+        });
       const body = JSON.parse(options.body as string);
       return Response.json(textWire(body.analysisId, body.elementId));
     });
@@ -149,6 +150,7 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
   const upload = (key?: string, bytes?: Buffer, filename = 'message.png') => {
     const call = request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt('development-user')}`)
       .field('type', 'TEXT')
       .field('sourceType', 'SCREEN_CROP');
     if (key) call.set('Idempotency-Key', key);
@@ -175,6 +177,22 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
       expect(imageProvider.analyze).not.toHaveBeenCalled();
     },
   );
+  it('requires JWT for direct and OCR requests in development', async () => {
+    await request(app.getHttpServer())
+      .post('/api/analysis')
+      .send({ type: 'TEXT', text: '검증용 텍스트입니다.' })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post('/api/analysis')
+      .field('type', 'TEXT')
+      .field('sourceType', 'SCREEN_CROP')
+      .attach('file', image, 'capture.png')
+      .expect(401);
+    await upload().set('Authorization', 'Bearer invalid').expect(401);
+    expect(transport).not.toHaveBeenCalled();
+    expect(db.analysis.create).not.toHaveBeenCalled();
+  });
+
   it('persists authenticated OCR metadata and retrieves it by analysisId and owner', async () => {
     settings.NODE_ENV = 'production';
     const response = await upload()
@@ -206,16 +224,34 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
   it('sends direct text as JSON to the same text/OCR server without image inference', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt('development-user')}`)
       .send({
         type: 'TEXT',
         sourceType: 'DIRECT',
-        text: '직접 입력한 합성 문자입니다.',
+        text:
+          '직접 입력한 합성 문자입니다. ' +
+          '가'.repeat(200) +
+          ' 031-123-4567 070-1234-5678',
       })
       .expect(202);
     expect(transport.mock.calls[0][0].toString()).toBe(
       'http://127.0.0.1:9/internal/v1/text-analyses',
     );
     expect(response.body.result.textResult.sourceType).toBe('TEXT');
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body.result.textPreview).not.toContain('031');
+    expect(response.body.result.extractedPhoneNumbers).toEqual([
+      {
+        phoneNumber: '0311234567',
+        displayNumber: '031-123-4567',
+        source: 'TEXT',
+      },
+      {
+        phoneNumber: '07012345678',
+        displayNumber: '070-1234-5678',
+        source: 'TEXT',
+      },
+    ]);
     expect(imageProvider.analyze).not.toHaveBeenCalled();
   });
   it('routes explicit SCREEN_CROP through OCR and stores only metadata', async () => {
@@ -246,6 +282,18 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
       30 * 86400000,
     );
     expect(JSON.stringify(stored)).not.toContain('private original');
+    expect(response.body.result.extractedPhoneNumbers).toEqual([
+      {
+        phoneNumber: '01012345678',
+        displayNumber: '010-1234-5678',
+        source: 'OCR',
+      },
+      { phoneNumber: '021234567', displayNumber: '02-123-4567', source: 'OCR' },
+    ]);
+    expect(response.text).not.toContain('private original');
+    expect(JSON.stringify(stored)).not.toMatch(
+      /01012345678|010-1234-5678|extractedPhoneNumbers/,
+    );
     expect(stored.textResult).not.toHaveProperty('text');
     expect(stored.textResult).not.toHaveProperty('evidence');
     expect(imageProvider.analyze).not.toHaveBeenCalled();
@@ -253,10 +301,35 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
       capture.mock.calls[0][1].buffer.every((byte: number) => byte === 0),
     ).toBe(true);
   });
+  it.each(['', '010-1234-5678'])(
+    'returns no OCR numbers for empty or low-confidence text %j',
+    async (text) => {
+      transport.mockImplementationOnce(async (_url, options: RequestInit) => {
+        const form = options.body as FormData;
+        const wire = textWire(
+          String(form.get('analysisId')),
+          String(form.get('elementId')),
+          'SCREEN_CROP',
+        );
+        return Response.json({
+          ...wire,
+          text,
+          quality: { ...wire.quality, poorOcrConfidence: Boolean(text) },
+        });
+      });
+      const response = await upload().expect(202);
+      expect(response.body.result.extractedPhoneNumbers).toEqual([]);
+    },
+  );
+
   it('replays completed screenshots without another AI call and rejects different content with same key', async () => {
     const first = await upload('capture-1').expect(202);
     const second = await upload('capture-1').expect(202);
-    expect(second.body).toEqual(first.body);
+    expect(first.body.result.extractedPhoneNumbers).toHaveLength(2);
+    expect(second.body).toEqual({
+      ...first.body,
+      result: { ...first.body.result, extractedPhoneNumbers: [] },
+    });
     expect(transport).toHaveBeenCalledTimes(1);
     const other = await sharp({
       create: { width: 4, height: 4, channels: 3, background: 'black' },
@@ -270,6 +343,7 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
     await upload('same-key').expect(202);
     await request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt('development-user')}`)
       .set('Idempotency-Key', 'same-key')
       .send({ type: 'TEXT', text: '다른 유형의 입력입니다.' })
       .expect(409);
@@ -285,10 +359,12 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
   it('rejects missing file and ambiguous multipart text', async () => {
     await request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt('development-user')}`)
       .field('type', 'TEXT')
       .expect(400);
     await request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt('development-user')}`)
       .field('type', 'TEXT')
       .field('text', '문자와 파일 동시 전송')
       .attach('file', image, 'capture.png')
@@ -312,6 +388,7 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
   ])('rejects invalid JSON source/input combination %j', async (body) => {
     await request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt('development-user')}`)
       .send(body)
       .expect(400);
     expect(db.analysis.create).not.toHaveBeenCalled();
@@ -328,6 +405,7 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
     async (type, sourceType) => {
       const call = request(app.getHttpServer())
         .post('/api/analysis')
+        .set('Authorization', `Bearer ${jwt('development-user')}`)
         .field('type', type);
       if (sourceType !== undefined) call.field('sourceType', sourceType);
       await call.attach('file', image, 'capture.png').expect(400);
@@ -338,6 +416,7 @@ describe('TEXT direct and screenshot→OCR public workflow', () => {
   it('requires a file even with an explicit multipart SCREEN_CROP', async () => {
     await request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', `Bearer ${jwt('development-user')}`)
       .field('type', 'TEXT')
       .field('sourceType', 'SCREEN_CROP')
       .expect(400);
