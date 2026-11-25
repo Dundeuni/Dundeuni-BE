@@ -104,3 +104,7 @@ History 외부 조회에서 만료 제외 정책과 기록 동의/보관/삭제 
   사용자·만료·완료 요약 필터, 동일 createdAt의 ID 역순, 최근 3건·cursor 다음 페이지·상세 조회.
 - 기존 Migration 체인과 Prisma Schema의 diff 및 SQL CHECK 동작을 각각 확인한다.
 - 배포/기존 데이터 스키마에 Migration을 적용하거나 기존 행을 수정하지 않는다.
+
+## 2026-11-22 후속 변경
+
+위 내용은 기존 모델 감사 시점 기준이다. 이후 만료 데이터 자동 정리와 expiresAt/id 복합 인덱스를 추가했다. 현재 보관 상한·삭제 정책·migration은 `analysis-expiry.md`를 참고한다.

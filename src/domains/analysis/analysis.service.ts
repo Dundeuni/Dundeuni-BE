@@ -1,3 +1,4 @@
+import { analysisExpiresAt } from './analysis-retention.policy';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Analysis } from '@prisma/client';
@@ -64,8 +65,8 @@ export class AnalysisService {
         .update('\0')
         .update(file.buffer)
         .digest('hex');
-      const expiresAt = new Date(
-        Date.now() + this.positiveConfig('ANALYSIS_RETENTION_SECONDS') * 1000,
+      const expiresAt = analysisExpiresAt(
+        Math.min(this.positiveConfig('ANALYSIS_RETENTION_SECONDS'), 604800),
       );
       let analysis = await this.repository.create(userId, hash, expiresAt);
       let reserved = false;

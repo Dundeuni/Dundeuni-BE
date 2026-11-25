@@ -1,3 +1,5 @@
+import { AnalysisExpiryCleanupService } from '../src/domains/analysis/analysis-expiry-cleanup.service';
+import { createHmac } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -12,6 +14,16 @@ import { IMAGE_ANALYSIS_PROVIDER } from '../src/domains/analysis/image-analysis.
 import { AnalysisUsageService } from '../src/domains/analysis/analysis-usage.service';
 
 const secret = 'test-access-secret';
+const header = Buffer.from(JSON.stringify({ alg: 'HS256' })).toString(
+  'base64url',
+);
+const payload = Buffer.from(
+  JSON.stringify({
+    sub: 'image-owner',
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  }),
+).toString('base64url');
+const token = `${header}.${payload}.${createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url')}`;
 const png = () =>
   Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWP4//8/AAX+Av5Y8msOAAAAAElFTkSuQmCC',
@@ -21,6 +33,7 @@ const png = () =>
 describe('IMAGE analysis API', () => {
   let app: INestApplication;
   let rows: Map<string, Analysis>;
+  let retentionSeconds = '86400';
   const provider = { analyze: jest.fn() };
   const usage = { reserveAiUsage: jest.fn(), releaseAiUsage: jest.fn() };
   const repository = {
@@ -73,9 +86,11 @@ describe('IMAGE analysis API', () => {
           ({
             JWT_ACCESS_SECRET: secret,
             ANALYSIS_MAX_FILE_BYTES: '1024',
-            ANALYSIS_RETENTION_SECONDS: '86400',
+            ANALYSIS_RETENTION_SECONDS: retentionSeconds,
           })[key],
       })
+      .overrideProvider(AnalysisExpiryCleanupService)
+      .useValue({})
       .overrideProvider(PrismaService)
       .useValue({})
       .overrideProvider(AnalysisRepository)
@@ -95,6 +110,7 @@ describe('IMAGE analysis API', () => {
   });
   beforeEach(() => {
     rows = new Map();
+    retentionSeconds = '86400';
     jest.clearAllMocks();
     provider.analyze.mockReset().mockResolvedValue({
       aiGenerationScore: 82.4,
@@ -107,7 +123,10 @@ describe('IMAGE analysis API', () => {
   afterAll(async () => {
     await app.close();
   });
-  const post = () => request(app.getHttpServer()).post('/api/analysis');
+  const post = () =>
+    request(app.getHttpServer())
+      .post('/api/analysis')
+      .auth(token, { type: 'bearer' });
   const upload = () =>
     post().field('type', 'IMAGE').attach('file', png(), 'sample.png');
 
@@ -230,17 +249,39 @@ describe('IMAGE analysis API', () => {
     await post().field('type', 'TEXT').field('text', 'example').expect(400);
     expect(provider.analyze).not.toHaveBeenCalled();
   });
-  it('uses the temporary user without an access token', async () => {
-    await upload().expect(202);
-    expect([...rows.values()][0].userId).toBe('development-user');
+  it.each(['2592000', '2592001'])(
+    'applies the maximum 30-day expiry at IMAGE creation: %s',
+    async (value) => {
+      retentionSeconds = value;
+      const before = Date.now();
+      const response = await upload().expect(202);
+      const after = Date.now();
+      const expires = Date.parse(response.body.result.expiresAt);
+      expect(expires).toBeGreaterThanOrEqual(before + 30 * 86400000);
+      expect(expires).toBeLessThanOrEqual(after + 30 * 86400000);
+    },
+  );
+  it('requires authentication before any image side effects', async () => {
+    await request(app.getHttpServer())
+      .post('/api/analysis')
+      .field('type', 'IMAGE')
+      .attach('file', png(), 'sample.png')
+      .expect(401);
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(provider.analyze).not.toHaveBeenCalled();
   });
-  it('temporarily ignores invalid access tokens', async () => {
+  it('stores the authenticated user on the image record', async () => {
+    await upload().expect(202);
+    expect([...rows.values()][0].userId).toBe('image-owner');
+  });
+  it('rejects invalid access tokens before creating an image record', async () => {
     await post()
       .set('Authorization', 'Bearer invalid')
       .field('type', 'IMAGE')
       .attach('file', png(), 'sample.png')
-      .expect(202);
-    expect([...rows.values()][0].userId).toBe('development-user');
+      .expect(401);
+    expect(repository.create).not.toHaveBeenCalled();
+    expect(provider.analyze).not.toHaveBeenCalled();
   });
   it('creates a fresh analysis for each request without a key', async () => {
     const first = await upload().expect(202);
@@ -342,13 +383,13 @@ describe('IMAGE analysis API', () => {
       .get('/api/health')
       .expect(200, { status: 'ok' });
   });
-  it('documents unauthenticated multipart requests and all responses', () => {
+  it('documents authenticated multipart requests and all responses', () => {
     const doc = SwaggerModule.createDocument(
       app,
       new DocumentBuilder().addBearerAuth().build(),
     );
     const operation = doc.paths['/api/analysis'].post!;
-    expect(operation.security ?? []).toEqual([]);
+    expect(operation.security).toEqual([{ bearer: [] }]);
     expect(operation.requestBody).toMatchObject({
       content: {
         'multipart/form-data': { schema: { required: ['type', 'file'] } },

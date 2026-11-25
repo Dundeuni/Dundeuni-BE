@@ -1,3 +1,9 @@
+import { AnalysisExpiryCleanupService } from './analysis-expiry-cleanup.service';
+import { AnalysisExpiryRepository } from './analysis-expiry.repository';
+import { ImageHistorySummaryService } from './image-history-summary.service';
+import { AnalysisHistoryController } from './analysis-history.controller';
+import { AnalysisHistoryService } from './analysis-history.service';
+import { AnalysisHistoryRepository } from './analysis-history.repository';
 import { UploadedImageCleanupInterceptor } from './uploaded-image-cleanup.interceptor';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -30,8 +36,13 @@ import {
       },
     }),
   ],
-  controllers: [AnalysisController],
+  controllers: [AnalysisHistoryController, AnalysisController],
   providers: [
+    AnalysisExpiryCleanupService,
+    AnalysisExpiryRepository,
+    AnalysisHistoryService,
+    ImageHistorySummaryService,
+    AnalysisHistoryRepository,
     UploadedImageCleanupInterceptor,
     PrismaService,
     AccessTokenGuard,
