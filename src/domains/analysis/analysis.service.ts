@@ -1,3 +1,4 @@
+import { parseSummaryDetail } from './image-summary-content';
 import { AnalysisSummaryRepository } from './analysis-summary.repository';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -20,6 +21,12 @@ import { AnalysisUsageService } from './analysis-usage.service';
 import { ImageAnalysisService } from './image-analysis.service';
 import { normalizeTextInput } from './text-analysis.input';
 import { TextAiWorkflowService } from './text-ai-workflow.service';
+
+const IMAGE_DETAIL_LABELS = {
+  GENERATION_OR_MANIPULATION_SUSPECTED: '위험',
+  INCONCLUSIVE: '주의',
+  NO_CLEAR_SIGNAL: '안전',
+} as const;
 
 @Injectable()
 export class AnalysisService {
@@ -260,6 +267,9 @@ export class AnalysisService {
       row.modelResults.find((model) => model.kind === 'MANIPULATION'),
     );
     const overallResult = calculateOverallResult(generation, manipulation);
+    const summaryStatus = row.type === 'IMAGE' ? row.summaryStatus ?? null : null;
+    const completed = summaryStatus === 'COMPLETED';
+    const detail = completed ? parseSummaryDetail(row.summaryDetail) : null;
     return {
       isSuccess: true,
       code: 'ANALYSIS200',
@@ -277,8 +287,26 @@ export class AnalysisService {
                 generation,
                 manipulation,
               },
-        overallResult,
+        overallResult:
+          row.type === 'IMAGE' &&
+          row.status === 'COMPLETED' &&
+          (row.imageResultStatus === 'COMPLETED' ||
+            row.imageResultStatus === 'PARTIAL_FAILED') &&
+          (generation?.status === 'SUCCEEDED' ||
+            manipulation?.status === 'SUCCEEDED')
+            ? {
+                ...overallResult,
+                decisionLabel: IMAGE_DETAIL_LABELS[overallResult.decision],
+              }
+            : overallResult,
         guides: resultGuides(overallResult, generation, manipulation),
+        summaryStatus,
+        summary: completed ? row.summary : null,
+        detailedReasons: detail?.detailedReasons ?? [],
+        actionGuides: detail?.actionGuides ?? [],
+        reassurance: detail?.reassurance ?? null,
+        summaryModel: completed ? row.summaryModel : null,
+        summarizedAt: completed ? (row.summarizedAt?.toISOString() ?? null) : null,
       },
     };
   }

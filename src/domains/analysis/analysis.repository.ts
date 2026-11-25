@@ -285,6 +285,7 @@ export class AnalysisRepository {
       where: { id },
       data: {
         summaryStatus: value.status,
+        summaryDetail: Prisma.DbNull,
         summary: value.status === 'COMPLETED' ? value.summary : null,
         summaryModel: value.status === 'COMPLETED' ? value.model : null,
         summarizedAt: value.status === 'COMPLETED' ? value.summarizedAt : null,

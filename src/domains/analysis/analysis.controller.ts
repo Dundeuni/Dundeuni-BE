@@ -33,6 +33,7 @@ import { ApiError, ApiErrorFilter } from '../../common/http/api-error';
 import { CreateAnalysisDto } from './analysis.dto';
 import { ImageModelsPublicResultDto } from './image-analysis-v1.dto';
 import { AnalysisService } from './analysis.service';
+import { AnalysisSummaryResponseDto } from './analysis-summary.dto';
 import { AnalysisResultResponseDto } from './analysis-result.dto';
 
 function errorSchema(code: string) {
@@ -63,9 +64,10 @@ export class AnalysisController {
   @ApiOperation({
     summary: '이미지 분석 결과 상세 조회',
     description:
-      '저장된 분석 및 모델별 결과를 조회합니다. 요약은 기존 /summary에서 별도로 조회합니다. 개발용 인증 정책 유지.',
+      '저장된 분석 및 모델별 결과를 조회합니다. 완료된 이미지의 대표 판정은 위험·주의·안전입니다. 저장된 구조화 요약도 함께 반환합니다. PENDING이면 동일 API를 재조회합니다.',
   })
   @ApiResponse({ status: 200, type: AnalysisResultResponseDto })
+  @ApiResponse({ status: 401, description: 'AUTH401: JWT 인증 실패' })
   @ApiResponse({ status: 400, description: 'COMMON400: UUID 형식 오류' })
   @ApiResponse({
     status: 404,
@@ -81,43 +83,13 @@ export class AnalysisController {
 
   @Get(':analysisId/summary')
   @ApiOperation({
-    summary: '이미지 분석 비동기 요약 조회',
+    summary: '이미지 분석 비동기 요약 조회 (하위 호환)',
+    deprecated: true,
     description:
-      'PENDING/FAILED는 summary=null. 비활성화 또는 작업 등록 전 summaryStatus=null. 개발용 인증 정책 유지.',
+      'PENDING, FAILED, 미생성은 요약과 안심 조언이 null이며 상세 배열은 비어 있습니다. 기존 완료 기록의 요약 문자열은 유지됩니다.',
   })
-  @ApiResponse({
-    status: 200,
-    description: 'ANALYSIS200: 요약 상태 조회',
-    schema: {
-      type: 'object',
-      properties: {
-        isSuccess: { type: 'boolean', example: true },
-        code: { type: 'string', example: 'ANALYSIS200' },
-        message: {
-          type: 'string',
-          example: '이미지 분석 요약 조회에 성공했습니다.',
-        },
-        result: {
-          type: 'object',
-          properties: {
-            analysisId: { type: 'string', format: 'uuid' },
-            summaryStatus: {
-              type: 'string',
-              enum: ['PENDING', 'COMPLETED', 'FAILED'],
-              nullable: true,
-            },
-            summary: { type: 'string', nullable: true },
-            summaryModel: { type: 'string', nullable: true },
-            summarizedAt: {
-              type: 'string',
-              format: 'date-time',
-              nullable: true,
-            },
-          },
-        },
-      },
-    },
-  })
+  @ApiResponse({ status: 200, type: AnalysisSummaryResponseDto })
+  @ApiResponse({ status: 401, description: 'AUTH401: JWT 인증 실패' })
   @ApiResponse({ status: 400, description: 'COMMON400: UUID 형식 오류' })
   @ApiResponse({
     status: 404,

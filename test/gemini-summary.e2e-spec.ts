@@ -1,5 +1,9 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  summaryOptions,
+  summaryResponseSchema,
+} from '../src/domains/analysis/image-summary-content';
 import { AnalysisModelResult } from '@prisma/client';
 import {
   GeminiSummaryClient,
@@ -28,19 +32,36 @@ const model = (
   retryable: null,
 });
 const rows = [
-  model('GENERATION', 'AI_GENERATED_SUSPECTED'),
-  model('MANIPULATION', 'MANIPULATION_SUSPECTED'),
+  {
+    ...model('GENERATION', 'AI_GENERATED_SUSPECTED'),
+    reasons: [
+      { description: 'CuRe 생성 탐지 점수가 임시 의심 기준 이상입니다.' },
+    ],
+  },
+  {
+    ...model('MANIPULATION', 'MANIPULATION_SUSPECTED'),
+    reasons: [
+      { description: 'FUSED 변조 탐지 점수가 임시 의심 기준 이상입니다.' },
+    ],
+  },
 ];
 const input = summaryInput(rows);
-const summary =
-  'AI 생성과 관련된 의심 신호가 감지되었습니다. 이미지 변조와 관련된 의심 신호가 감지되었습니다. 출처와 원본을 확인하는 것이 좋습니다.';
-const response = (value = summary, data = input) =>
-  JSON.stringify({
-    summary: value,
+const options = summaryOptions(input);
+const summary = options.summaries[0];
+const structured = (data = input) => {
+  const choices = summaryOptions(data);
+  return {
+    summary: choices.summaries[0],
+    detailedReasons: choices.detailedReasons,
+    actionGuides: choices.actionGuides.slice(0, 3),
+    reassurance: choices.reassurances[0],
     generationDecision: data.generation?.decision ?? null,
     manipulationDecision: data.manipulation?.decision ?? null,
     overallDecision: data.overallResult.decision,
-  });
+  };
+};
+const response = (value = summary, data = input) =>
+  JSON.stringify({ ...structured(data), summary: value });
 describe('Gemini structured client and privacy', () => {
   let client: GeminiSummaryClient;
   let warning: jest.SpyInstance;
@@ -60,6 +81,11 @@ describe('Gemini structured client and privacy', () => {
     await expect(client.generate(input)).resolves.toEqual({
       summary,
       model: 'test-model',
+      detail: {
+        detailedReasons: options.detailedReasons,
+        actionGuides: options.actionGuides.slice(0, 3),
+        reassurance: options.reassurances[0],
+      },
     });
   });
   it.each([
@@ -263,87 +289,106 @@ describe('Gemini structured client and privacy', () => {
     ])
       expect(text).not.toContain(forbidden);
   });
+  it('accepts only known evidence that matches model kind, status and decision', () => {
+    expect(input.generation?.evidenceCode).toBe('AI_GENERATED_SUSPECTED');
+    expect(input.manipulation?.evidenceCode).toBe('MANIPULATION_SUSPECTED');
+    expect(JSON.stringify(input)).not.toMatch(/CuRe|FUSED|임시 의심 기준/);
+    for (const record of [
+      { ...rows[0], decision: 'NO_CLEAR_GENERATION_SIGNAL' as const },
+      { ...rows[0], status: 'FAILED' as const, decision: null },
+      { ...rows[0], reasons: [] },
+      { ...rows[0], decision: 'INCONCLUSIVE' as const },
+    ]) {
+      expect(summaryInput([record]).generation?.evidenceCode).toBeNull();
+    }
+  });
+
   it.each([
-    'AI로 만들어졌을 가능성이 있습니다. 이미지 조작의 징후가 발견되었습니다.',
-    'AI 생성의 흔적이 보입니다. 이미지 합성 가능성이 높습니다.',
-    'AI 생성 의심 신호가 있습니다. 이미지 변조 의심 신호가 있습니다. 이것만으로 진위를 단정할 수 없습니다.',
-  ])('accepts synonymous suspicion %#', (text) => {
-    expect(validateSummary(response(text), input)).toBe(text);
-  });
-  it('accepts synonymous no-signal and uncertainty separately', () => {
-    const data = summaryInput([
-      model('GENERATION', 'INCONCLUSIVE'),
-      model('MANIPULATION', 'NO_CLEAR_MANIPULATION_SIGNAL'),
-    ]);
-    const text =
-      '인공지능으로 만들어졌는지는 불분명합니다. 이미지 조작의 흔적은 발견되지 않았습니다.';
-    expect(validateSummary(response(text, data), data)).toBe(text);
-  });
-  it('does not confuse inconclusive with absence of evidence', () => {
-    const data = summaryInput([
-      model('GENERATION', 'INCONCLUSIVE'),
-      model('MANIPULATION', 'INCONCLUSIVE'),
-    ]);
-    const text =
-      'AI 생성 여부는 명확하지 않습니다. 이미지 변조 여부는 확실하게 판단할 수 없습니다.';
-    expect(validateSummary(response(text, data), data)).toBe(text);
-  });
-  it('accepts failed vs unrequested explanations but does not call failure success', () => {
-    const data = summaryInput([model('GENERATION', null, 'FAILED')]);
-    const text =
-      'AI 생성 분석은 오류로 완료되지 않았습니다. 이미지 변조 분석은 요청되지 않았습니다.';
-    expect(validateSummary(response(text, data), data)).toBe(text);
+    [
+      summaryInput([
+        model('GENERATION', 'INCONCLUSIVE'),
+        model('MANIPULATION', null, 'FAILED'),
+      ]),
+      '검사를 완료하지 못했습니다',
+    ],
+    [
+      summaryInput([model('GENERATION', null, 'FAILED')]),
+      '검사는 요청되지 않았습니다',
+    ],
+    [
+      summaryInput([
+        model('GENERATION', 'NO_CLEAR_GENERATION_SIGNAL'),
+        model('MANIPULATION', 'NO_CLEAR_MANIPULATION_SIGNAL'),
+      ]),
+      '뚜렷한 생성이나 변조 의심 신호가 확인되지 않았습니다',
+    ],
+  ])(
+    'accepts an explanation grounded in the model outcomes %#',
+    (data, phrase) => {
+      const output = validateSummary(JSON.stringify(structured(data)), data);
+      expect(output.summary).toContain(phrase);
+      expect(output.summary.split('. ').length).toBe(3);
+      expect(output.detailedReasons).toEqual([]);
+      expect(
+        summaryResponseSchema(data).properties.detailedReasons,
+      ).toMatchObject({ maxItems: 0 });
+    },
+  );
+
+  it.each([
+    { actionGuides: undefined },
+    { actionGuides: [...options.actionGuides, options.actionGuides[0]] },
+    { actionGuides: Array(3).fill(options.actionGuides[0]) },
+    {
+      actionGuides: [
+        options.actionGuides[0],
+        options.actionGuides[1],
+        { ...options.actionGuides[2], description: 'https://example.test' },
+      ],
+    },
+    {
+      detailedReasons: [options.detailedReasons[0], options.detailedReasons[0]],
+    },
+    { detailedReasons: [{ ...options.detailedReasons[0], type: 'URL' }] },
+    {
+      detailedReasons: [
+        {
+          ...options.detailedReasons[0],
+          description: '손가락 모양과 그림자가 이상합니다.',
+        },
+        options.detailedReasons[1],
+      ],
+    },
+    {
+      detailedReasons: [
+        { ...options.detailedReasons[0], title: 'CuRe 분석' },
+        options.detailedReasons[1],
+      ],
+    },
+    { reassurance: 'example@example.test' },
+    { reassurance: '<script>테스트</script>' },
+    { reassurance: '```테스트```' },
+    { reassurance: '가'.repeat(500) },
+    { generationDecision: 'INVALID' },
+    { extra: 'not allowed' },
+  ])('rejects invalid fields and unsupported claims %#', (patch) => {
     expect(() =>
-      validateSummary(
-        response(
-          'AI 생성의 뚜렷한 신호는 없습니다. 이미지 변조는 분석하지 않았습니다.',
-          data,
-        ),
-        data,
-      ),
-    ).toThrow(
-      expect.objectContaining({ diagnostic: 'generation:OPPOSITE_DECISION' }),
-    );
+      validateSummary(JSON.stringify({ ...structured(), ...patch }), input),
+    ).toThrow();
   });
-  it('checks contradictory later statements and reports safe model/rule only', async () => {
-    const text =
-      'AI 생성 신호가 의심됩니다. 이미지 변조 신호가 의심됩니다. AI 생성 신호는 없습니다.';
-    jest.spyOn(client, 'request').mockResolvedValue(response(text));
+
+  it('logs only a fixed code when an upstream response has unsupported details', async () => {
+    const text = response(
+      'AI 생성 신호가 70% 검출되었습니다. 이미지 변조 신호도 있습니다.',
+    );
+    jest.spyOn(client, 'request').mockResolvedValue(text);
     await expect(client.generate(input)).rejects.toMatchObject({
-      code: 'SUMMARY_CONTRADICTION',
-      diagnostic: 'generation:OPPOSITE_DECISION',
+      code: 'SUMMARY_INVALID_RESPONSE',
     });
     expect(warning).toHaveBeenCalledWith(
-      expect.stringContaining('diagnostic=generation:OPPOSITE_DECISION'),
+      expect.stringContaining('code=SUMMARY_INVALID_RESPONSE'),
     );
     expect(JSON.stringify(warning.mock.calls)).not.toContain(text);
-  });
-  it('reports missing explanation without logging text', () => {
-    expect(() =>
-      validateSummary(
-        response('이미지를 확인하는 것이 좋습니다. 출처와 원본을 확인하세요.'),
-        input,
-      ),
-    ).toThrow(
-      expect.objectContaining({
-        diagnostic: 'generation:MISSING_MODEL_EXPLANATION',
-      }),
-    );
-  });
-  it('allows failure/inconclusive/no-evidence summaries with accurate decisions', () => {
-    const data = summaryInput([
-      model('GENERATION', 'INCONCLUSIVE'),
-      model('MANIPULATION', null, 'FAILED'),
-    ]);
-    expect(
-      validateSummary(
-        response(
-          'AI 생성 여부는 판단하기 어렵습니다. 이미지 변조 분석은 실패하여 판단할 수 없습니다.',
-          data,
-        ),
-        data,
-      ),
-    ).toContain('실패');
   });
 });
 
