@@ -28,6 +28,9 @@ const historySelect = {
   reasons: true,
   createdAt: true,
   completedAt: true,
+  expiresAt: true,
+  imageResultStatus: true,
+  modelResults: { select: { kind: true, status: true, displayScore: true, decision: true, reasons: true, limitations: true, modelName: true, modelVersion: true, policyVersion: true, errorCode: true, retryable: true } },
 } satisfies Prisma.AnalysisSelect;
 export type StoredHistory = Prisma.AnalysisGetPayload<{
   select: typeof historySelect;
