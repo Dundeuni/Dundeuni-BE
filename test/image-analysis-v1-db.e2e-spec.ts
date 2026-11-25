@@ -20,6 +20,15 @@ import { AnalysisRepository } from '../src/domains/analysis/analysis.repository'
 import { PrismaService } from '../src/prisma/prisma.service';
 import { ImageModelPublicResultDto } from '../src/domains/analysis/image-analysis-v1.dto';
 
+import { AnalysisSummaryRepository } from '../src/domains/analysis/analysis-summary.repository';
+import { AnalysisSummaryWorker } from '../src/domains/analysis/analysis-summary.worker';
+import {
+  GeminiSummaryClient,
+  summaryInput,
+  SummaryError,
+} from '../src/domains/analysis/gemini-summary.client';
+import { summaryOptions } from '../src/domains/analysis/image-summary-content';
+
 const dbDescribe = process.env.V1_DB_TEST === '1' ? describe : describe.skip;
 dbDescribe('V1 Prisma storage in isolated local schema', () => {
   const schema = `v1_test_${randomUUID().replaceAll('-', '')}`;
@@ -434,6 +443,20 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
           ? 'GENERATION_OR_MANIPULATION_SUSPECTED'
           : decision,
       );
+      const detail = await request(app.getHttpServer())
+        .get(`/api/analysis/${context.analysisId}`)
+        .expect(200);
+      expect(detail.body.result.overallResult).toEqual({
+        ...overall,
+        decisionLabel:
+          status === 503
+            ? '판단 불가'
+            : decision === 'SUSPECTED'
+              ? '위험'
+              : decision === 'NO_CLEAR_SIGNAL'
+                ? '안전'
+                : '주의',
+      });
       expect(overall).not.toHaveProperty('score');
       if (selected === 'TIMEOUT') {
         expect(saved!.imageResultStatus).toBeNull();
@@ -671,6 +694,186 @@ dbDescribe('V1 Prisma storage in isolated local schema', () => {
       }),
     ).rejects.toMatchObject({ code: 'P2003' });
   });
+  it('atomically stores structured summaries through the worker and fences stale jobs', async () => {
+    const config = new ConfigService({
+      GEMINI_SUMMARY_ENABLED: 'true',
+      GEMINI_API_KEY: 'test-only',
+      GEMINI_MODEL: 'gemini-test',
+    });
+    const jobs = new AnalysisSummaryRepository(
+      prisma as unknown as PrismaService,
+      config,
+    );
+    const row = await repository.create(
+      'development-user',
+      'structured-summary',
+      new Date(Date.now() + 60000),
+    );
+    await repository.completeV1(
+      row.id,
+      {
+        status: 'COMPLETED',
+        generation: {
+          ...result(),
+          decision: 'AI_GENERATED_SUSPECTED',
+          reasons: [
+            { description: 'CuRe 생성 탐지 점수가 임시 의심 기준 이상입니다.' },
+          ],
+        },
+        manipulation: null,
+      },
+      new Date(),
+    );
+    await Promise.all([jobs.enqueue(row.id), jobs.enqueue(row.id)]);
+    expect(
+      await prisma.analysisSummaryJob.count({ where: { analysisId: row.id } }),
+    ).toBe(1);
+    const pending = await request(app.getHttpServer())
+      .get(`/api/analysis/${row.id}/summary`)
+      .expect(200);
+    expect(pending.body.result).toMatchObject({
+      summaryStatus: 'PENDING',
+      summary: null,
+      detailedReasons: [],
+      actionGuides: [],
+      reassurance: null,
+    });
+
+    await prisma.analysisSummaryJob.update({
+      where: { analysisId: row.id },
+      data: { nextRunAt: new Date(0) },
+    });
+    const stale = await jobs.claim();
+    expect(stale?.analysisId).toBe(row.id);
+    await prisma.analysisSummaryJob.update({
+      where: { analysisId: row.id },
+      data: { leaseUntil: new Date(0) },
+    });
+    const stored = await repository.findWithModelResults(row.id);
+    const input = summaryInput(stored!.modelResults);
+    const options = summaryOptions(input);
+    const summary = options.summaries[0];
+    const detail = {
+      detailedReasons: options.detailedReasons,
+      actionGuides: options.actionGuides.slice(0, 3),
+      reassurance: options.reassurances[0],
+    };
+    expect(detail.detailedReasons).toHaveLength(1);
+    const client = new GeminiSummaryClient(config);
+    const adapter = jest
+      .spyOn(client, 'request')
+      .mockRejectedValueOnce({ status: 503 })
+      .mockResolvedValue(
+        JSON.stringify({
+          summary,
+          ...detail,
+          generationDecision: input.generation?.decision,
+          manipulationDecision: null,
+          overallDecision: input.overallResult.decision,
+        }),
+      );
+    const worker = new AnalysisSummaryWorker(jobs, client, config);
+    await worker.processOne();
+    expect(
+      await prisma.analysis.findUnique({ where: { id: row.id } }),
+    ).toMatchObject({
+      summaryStatus: 'PENDING',
+      summary: null,
+      summaryDetail: null,
+    });
+    expect(
+      await prisma.analysisSummaryJob.findUnique({
+        where: { analysisId: row.id },
+      }),
+    ).toMatchObject({
+      status: 'PENDING',
+      attempts: 2,
+      lastErrorCode: 'GEMINI_UNAVAILABLE',
+    });
+    expect(
+      await jobs.finish(stale!, new SummaryError('GEMINI_TIMEOUT', true)),
+    ).toBe(false);
+    await prisma.analysisSummaryJob.update({
+      where: { analysisId: row.id },
+      data: { nextRunAt: new Date(0) },
+    });
+    await worker.processOne();
+
+    const completed = await prisma.analysis.findUniqueOrThrow({
+      where: { id: row.id },
+    });
+    expect(completed).toMatchObject({
+      summaryStatus: 'COMPLETED',
+      summary,
+      summaryDetail: detail,
+    });
+    expect(
+      await prisma.analysisSummaryJob.findUnique({
+        where: { analysisId: row.id },
+      }),
+    ).toMatchObject({ status: 'COMPLETED', attempts: 3 });
+    const response = await request(app.getHttpServer())
+      .get(`/api/analysis/${row.id}/summary`)
+      .expect(200);
+    expect(response.body.result).toMatchObject({ summary, ...detail });
+    expect(adapter).toHaveBeenCalledTimes(2);
+    expect(
+      (await repository.findWithModelResults(row.id))?.modelResults,
+    ).toEqual(stored!.modelResults);
+  });
+
+  it('keeps stored image results readable after a terminal Gemini validation error', async () => {
+    const config = new ConfigService({
+      GEMINI_SUMMARY_ENABLED: 'true',
+      GEMINI_API_KEY: 'test-only',
+      GEMINI_MODEL: 'gemini-test',
+    });
+    const jobs = new AnalysisSummaryRepository(
+      prisma as unknown as PrismaService,
+      config,
+    );
+    const row = await repository.create(
+      'development-user',
+      'invalid-summary',
+      new Date(Date.now() + 60000),
+    );
+    await repository.completeV1(
+      row.id,
+      {
+        status: 'COMPLETED',
+        generation: result(),
+        manipulation: null,
+      },
+      new Date(),
+    );
+    await jobs.enqueue(row.id);
+    await prisma.analysisSummaryJob.update({
+      where: { analysisId: row.id },
+      data: { nextRunAt: new Date(0) },
+    });
+    const getImage = () =>
+      request(app.getHttpServer()).get(`/api/analysis/${row.id}`).expect(200);
+    const before = await getImage();
+    const client = new GeminiSummaryClient(config);
+    const adapter = jest
+      .spyOn(client, 'request')
+      .mockResolvedValue('{"summary":"private@example.test"}');
+    await new AnalysisSummaryWorker(jobs, client, config).processOne();
+    const summary = await request(app.getHttpServer())
+      .get(`/api/analysis/${row.id}/summary`)
+      .expect(200);
+    expect(summary.body.result).toMatchObject({
+      summaryStatus: 'FAILED',
+      summary: null,
+      detailedReasons: [],
+      actionGuides: [],
+      reassurance: null,
+    });
+    expect(summary.text).not.toContain('private@example.test');
+    expect((await getImage()).body).toEqual(before.body);
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+
   it('stores summary transitions without changing analysis or model data', async () => {
     const row = await repository.create(
       'schema-audit',

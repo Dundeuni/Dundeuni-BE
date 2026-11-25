@@ -13,7 +13,12 @@ export class AnalysisOverallResultDto implements ImageOverallResult {
     ],
   })
   decision!: ImageOverallResult['decision'];
-  @ApiProperty() decisionLabel!: string;
+  @ApiProperty({
+    example: '위험',
+    description:
+      '완료된 이미지 모델 결과는 위험·주의·안전으로 표시합니다. 실패 여부는 기존 상태와 오류 코드로 확인합니다.',
+  })
+  decisionLabel!: string;
   @ApiProperty({ example: 'image-overall-v1' })
   policyVersion!: 'image-overall-v1';
   @ApiProperty({ type: [String] })

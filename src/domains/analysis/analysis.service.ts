@@ -21,6 +21,12 @@ import { ImageAnalysisService } from './image-analysis.service';
 import { normalizeTextInput } from './text-analysis.input';
 import { TextAiWorkflowService } from './text-ai-workflow.service';
 
+const IMAGE_DETAIL_LABELS = {
+  GENERATION_OR_MANIPULATION_SUSPECTED: '위험',
+  INCONCLUSIVE: '주의',
+  NO_CLEAR_SIGNAL: '안전',
+} as const;
+
 @Injectable()
 export class AnalysisService {
   private readonly logger = new Logger(AnalysisService.name);
@@ -277,7 +283,18 @@ export class AnalysisService {
                 generation,
                 manipulation,
               },
-        overallResult,
+        overallResult:
+          row.type === 'IMAGE' &&
+          row.status === 'COMPLETED' &&
+          (row.imageResultStatus === 'COMPLETED' ||
+            row.imageResultStatus === 'PARTIAL_FAILED') &&
+          (generation?.status === 'SUCCEEDED' ||
+            manipulation?.status === 'SUCCEEDED')
+            ? {
+                ...overallResult,
+                decisionLabel: IMAGE_DETAIL_LABELS[overallResult.decision],
+              }
+            : overallResult,
         guides: resultGuides(overallResult, generation, manipulation),
       },
     };

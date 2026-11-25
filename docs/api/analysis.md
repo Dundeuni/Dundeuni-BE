@@ -626,14 +626,6 @@ HTTP 202 응답 예시:
 ```json
 {
   "isSuccess": true,
-  "code": "ANALYSIS200",
-  "message": "이미지 분석 요약 조회에 성공했습니다.",
-  "result": {
-    "analysisId": "8c1b24c0-3186-4ee5-a679-74acb055b001",
-    "summaryStatus": "COMPLETED",
-    "summary": "AI 생성 여부는 판단하기 어렵습니다. 이미지 변조와 관련된 의심 신호가 감지되었습니다. 출처와 원본을 확인하는 것이 좋습니다.",
-    "summaryModel": "configured-gemini-model",
-    "summarizedAt": "2026-10-13T10:00:00.000Z"
   "code": "ANALYSIS202",
   "message": "분석 요청 생성에 성공했습니다.",
   "result": {
@@ -648,21 +640,28 @@ HTTP 202 응답 예시:
 }
 ```
 
-| 필드 | 타입 | Nullable | 설명 |
-| --- | --- | --- | --- |
-| result.analysisId | string(UUID) | F | 분석 ID |
-| result.summaryStatus | string | T | PENDING / COMPLETED / FAILED. 비활성화·기존 데이터·등록 전에는 null |
-| result.summary | string | T | 검증된 한국어 2~4문장, 최대 600자. 완료 외에는 null |
-| result.summaryModel | string | T | 완료 시 사용한 설정 모델명 |
-| result.summarizedAt | string(ISO 8601 UTC) | T | 완료 시각 |
+## 이미지 분석 비동기 요약 조회
 
-200 ANALYSIS200: 상태 조회 성공(요약 실패도 조회는 성공). 400 COMMON400: UUID 오류. 404 COMMON404: 기록 없음/타인 기록/보관기간 만료. 500 COMMON500: 내부 오류. 오류는 기존 공통 envelope, result=null.
+`GET /api/analysis/{analysisId}/summary`는 기존 UUID, JWT, 소유권 및 만료 정책을 따릅니다.
+200 ANALYSIS200은 요약 상태 조회 성공입니다. UUID 오류는 400 COMMON400, 인증 실패는 401 AUTH401,
+없거나 다른 사용자 소유이거나 만료된 기록은 404 COMMON404, 내부 오류는 500 COMMON500입니다.
 
-FE는 POST의 analysisId로 이 API를 폴링한다. PENDING이면 간격을 두고 다시 조회하고 COMPLETED/FAILED면 중단한다. null은 아직 등록되지 않았거나 요약 비활성화 상태이며 무한 폴링하지 않는다. 이미지 분석 결과와 요약 상태는 독립적이다.
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| analysisId | UUID | 분석 ID |
+| summaryStatus | PENDING / COMPLETED / FAILED / null | 비활성화·미등록은 null |
+| summary | string 또는 null | 신규 결과는 상단 설명 2~3문장 |
+| detailedReasons | { type, title, description }[] | type은 GENERATION 또는 MANIPULATION. 검증 근거가 있는 모델별 최대 1개, 총 최대 2개 |
+| actionGuides | { title, description }[] | 신규 완료 결과에는 서로 다른 대응 수칙 3개 |
+| reassurance | string 또는 null | 신규 완료 결과의 안심 조언 1~2문장 |
+| summaryModel | string 또는 null | 기존 모델 메타데이터 |
+| summarizedAt | ISO 8601 또는 null | 요약 완료 시각 |
+
+FE 응답 예시와 상태별 렌더링은 [#35 이미지 상세 화면 연동](#issue-35--최초-이미지-분석-상세-화면-연동)을 참고합니다.
 
 ### 설정 및 Worker 운영
 
-1. 새 `20261014000000_analysis_summary_jobs` migration을 배포 절차에 따라 먼저 적용한다. 기존 migration은 수정하지 않는다.
+1. 기존 요약 작업 migration과 `20261125070000_image_summary_detail`을 배포 절차에 따라 앱 배포 전에 적용합니다. 신규 컬럼은 nullable JSONB이며 기존 완료 요약에는 재호출이나 일괄 변환이 필요하지 않습니다.
 2. 서버 환경에 GEMINI_API_KEY 및 GEMINI_MODEL을 설정한다. 키를 앱/로그/저장소에 노출하지 않는다.
 3. GEMINI_SUMMARY_ENABLED=true로 켠다. 환경변수 누락 시 기본 비활성화이며 기존 `.env`는 자동 변경하지 않는다. enabled 상태에서 키/모델이 없으면 작업은 재시도 없이 FAILED가 된다.
 4. Nest 앱과 함께 Worker가 실행된다. GEMINI_TIMEOUT_MS=15000, GEMINI_SUMMARY_POLL_MS=1000, GEMINI_SUMMARY_CONCURRENCY=1(프로세스당 최대 8), GEMINI_SUMMARY_MAX_ATTEMPTS=3(최대 10), GEMINI_SUMMARY_RETRY_MS=5000. 양의 정수 설정이며 재시도 간격은 지수 증가한다. SDK 자체 재시도는 끈다.
@@ -673,7 +672,7 @@ FE는 POST의 analysisId로 이 API를 폴링한다. PENDING이면 간격을 두
 
 `FOR UPDATE SKIP LOCKED`로 원자적으로 선점한다. lease는 Gemini timeout+30초이며 재시작 시 만료된 RUNNING 작업을 다시 선점한다. leaseToken과 유효기간이 일치하는 Worker만 job 및 Analysis 요약을 같은 트랜잭션에서 저장한다. 이미 완료한 요약은 덮어쓰지 않는다. 5xx/네트워크/timeout은 제한적으로 재시도하고(429는 아래 별도 정책 적용) 설정/인증/형식/모순 오류는 즉시 실패한다. 종료 시 호출을 abort하고 작업을 재예약한다. 강제 종료나 DB 장애는 lease 복구로 처리한다. 여러 프로세스는 개별 동시성 제한을 가지며 전체 호출 수는 프로세스 수에 비례한다.
 
-Gemini에는 DB 모델별 상태·판정·표시점수와 기존 calculateOverallResult 대표 판정만 전달한다. 이미지/경로/localization/rawScore/사용자·추적 ID/토큰과 자유서술 근거·제한사항은 입력에서 제외한다. 근거에 포함될 수 있는 내부 ID·토큰·API Key의 유출을 막기 위해 자유서술 텍스트를 전송하지 않는다. system instruction 및 JSON 출력 검증을 사용한다. 판정 echo, 문장 수·길이·한국어 및 명백한 판정 모순을 검사하지만 자연어 사실성이나 임의의 개인정보 패턴을 완전하게 보장하는 검사는 아니다. 공급자 근거에는 개인정보를 넣지 않는 계약이 필요하다.
+Gemini에는 모델 상태·판정·표시 점수, 종합 판정 Enum, 저장된 근거와 모델 판정이 일치할 때만 허용 근거 코드를 전달합니다. 근거 원문, 모델명·버전, 모델별 분석 한계, 내부 임계값 및 사용자 데이터는 입력에서 제외합니다. Gemini는 입력에 맞는 정형 설명과 대응 수칙을 선택합니다. 서버는 JSON 구조, 판정 일치, 근거 유형과 문구의 조합, 대응 수칙 중복, 허용 문구를 검증합니다. 승인된 문구 밖의 수치, 관찰 사실, 모델명, 개인 정보 및 HTML/URL/코드는 저장하지 않습니다.
 
 요약 작업은 모델 결과·이미지 처리 상태를 변경하지 않는다. 요약은 기존 expiresAt을 따른다. 만료된 기록 조회는 404, 처리 전 만료 작업은 FAILED가 된다. 기존 자동 삭제 미구현 정책은 유지한다. Gemini 요청은 재시작/lease 만료로 중복 호출될 수 있지만 DB 완료 저장은 멱등적이다. abort는 외부 서비스 처리/과금 중단을 보장하지 않는다.
 
@@ -767,7 +766,7 @@ curl http://localhost:3000/api/analysis/00000000-0000-4000-8000-000000000001
     },
     "overallResult": {
       "decision": "GENERATION_OR_MANIPULATION_SUSPECTED",
-      "decisionLabel": "생성·변조 의심",
+      "decisionLabel": "위험",
       "policyVersion": "image-overall-v1",
       "suspectedKinds": ["generation"],
       "uncertainKinds": ["manipulation"]
@@ -782,13 +781,12 @@ overallResult는 기존 정책·enum으로 저장된 모델 판정에서 재계�
 레거시/모델 결과 미저장 분석은 models=null, overallResult는 INCONCLUSIVE다.
 내부 DB 모델 ID·userId·requestHash·rawScore·localization은 공개하지 않는다.
 진행 중 및 실패한 분석도 보관 기한 내에서 조회할 수 있다.
-Prisma 스키마 및 migration 파일 변경이나 배포 DB migration 적용은 없다.
+배포 DB 변경은 별도 배포 절차로 적용합니다.
 
 ### 요약 처리 및 #98 역할 분리
 
 분석 결과 트랜잭션 완료 → 요약 작업 및 summaryStatus=PENDING 별도 등록 → POST 202 반환.
-Gemini 네트워크 호출은 Worker에서 실행하며 한국어 2~4문장과 판정 일치 검증 후
-summaryStatus=COMPLETED, summary, summaryModel, summarizedAt을 저장한다.
+Gemini 네트워크 호출은 Worker에서 실행합니다. 검증에 성공하면 summaryStatus=COMPLETED, summary, summaryDetail, summaryModel, summarizedAt을 작업 완료와 같은 트랜잭션에서 저장합니다.
 영구 오류 또는 재시도 소진 시 FAILED와 null 요약 필드를 저장한다.
 기존 503/504·네트워크·타임아웃 재시도, 횟수 상한·지연·jitter 환경변수 정책을 유지한다.
 작업 PK와 원자적 claim, leaseToken fencing으로 중복 완료를 차단하고 서버 재시작 시 만료 lease를 회수한다.
@@ -841,7 +839,7 @@ limitations는 제공된 한계를 정리해 유지하며 빈 배열을 분석 �
   "aiRiskLevel": null,
   "overallResult": {
     "decision": "GENERATION_OR_MANIPULATION_SUSPECTED",
-    "decisionLabel": "생성·변조 의심",
+    "decisionLabel": "위험",
     "policyVersion": "image-overall-v1",
     "suspectedKinds": ["generation"],
     "uncertainKinds": []
@@ -942,3 +940,78 @@ HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사�
 ## Issue #15 최신 POST 계약
 
 [POST TEXT/OCR 계약](../API-POST-TEXT-OCR.md)을 참고하세요. 과거 기록의 OCR 공개 경로 미연결 설명은 당시 시점 기준이며 현재는 명시적 sourceType 계약으로 연결합니다.
+
+## Issue #35 — 최초 이미지 분석 상세 화면 연동
+
+상세 화면을 연 뒤 `GET /api/analysis/{analysisId}`에서 AI 결과를 먼저 표시합니다. 완료된 IMAGE에 적용되는 표시 라벨은 다음과 같습니다. 판정 Enum과 모델별 점수, 재시도 시 저장 결과 병합 기준은 기존과 같습니다.
+
+| overallResult.decision | decisionLabel | 조건 |
+| --- | --- | --- |
+| GENERATION_OR_MANIPULATION_SUSPECTED | 위험 | 성공 모델에서 생성 또는 변조 의심 신호가 확인됨 |
+| INCONCLUSIVE | 주의 | 의심 신호 없이 실패·미요청·판단 불가 모델이 있음 |
+| NO_CLEAR_SIGNAL | 안전 | 두 모델 모두 성공하고 뚜렷한 의심 신호가 없음 |
+
+안전 라벨은 이번 검사에서 뚜렷한 의심 신호를 확인하지 못했다는 뜻입니다. 실패한 분석은 기존 `status: "FAILED"`, `errorCode`로 먼저 분기하고 위험도 배지를 그리지 않습니다. 모델 전체 실패 시 POST는 기존 `503 ANALYSIS503` 오류로 응답하고, 보관 기간 내 상세 GET은 실패 기록을 조회할 수 있습니다.
+
+상세 GET의 결과 일부 예시입니다.
+
+```json
+[
+  {"status":"COMPLETED","errorCode":null,"overallResult":{"decision":"GENERATION_OR_MANIPULATION_SUSPECTED","decisionLabel":"위험","policyVersion":"image-overall-v1","suspectedKinds":["generation"],"uncertainKinds":[]}},
+  {"status":"COMPLETED","errorCode":null,"overallResult":{"decision":"INCONCLUSIVE","decisionLabel":"주의","policyVersion":"image-overall-v1","suspectedKinds":[],"uncertainKinds":["manipulation"]}},
+  {"status":"COMPLETED","errorCode":null,"overallResult":{"decision":"NO_CLEAR_SIGNAL","decisionLabel":"안전","policyVersion":"image-overall-v1","suspectedKinds":[],"uncertainKinds":[]}},
+  {"status":"FAILED","errorCode":"ANALYSIS503","overallResult":{"decision":"INCONCLUSIVE","decisionLabel":"판단 불가","policyVersion":"image-overall-v1","suspectedKinds":[],"uncertainKinds":["generation","manipulation"]}}
+]
+```
+
+| 화면 | 응답 필드 |
+| --- | --- |
+| 종합 판정, 색상 및 캐릭터 | `overallResult.decisionLabel`, `overallResult.decision` |
+| 검사 시각 | `completedAt` |
+| AI 생성 판정 및 점수 | `models.generation.decision`, `models.generation.displayScore` |
+| 이미지 변조 판정 및 점수 | `models.manipulation.decision`, `models.manipulation.displayScore` |
+| 상단 설명 | 요약의 `summary` |
+| 분석 근거 | 요약의 `detailedReasons` |
+| 대응 수칙 | 요약의 `actionGuides` |
+| 안심 조언 | 요약의 `reassurance` |
+
+점수가 null이면 점수 미제공으로 표시합니다. 기존 API의 `modelName`, `modelVersion`, 모델 `limitations` 그리고 요약의 `summaryModel`은 호환을 위해 응답에 있으며 화면 표시 대상에서 제외합니다. 별도 종합 점수를 계산해 표시하지 않습니다.
+
+`GET /api/analysis/{analysisId}/summary`의 신규 완료 응답 예시입니다.
+
+```json
+{
+  "isSuccess": true,
+  "code": "ANALYSIS200",
+  "message": "이미지 분석 요약 조회에 성공했습니다.",
+  "result": {
+    "analysisId": "8c1b24c0-3186-4ee5-a679-74acb055b001",
+    "summaryStatus": "COMPLETED",
+    "summary": "이미지에서 생성이나 변조가 의심되는 신호가 확인되어 주의가 필요합니다. AI 생성 의심 신호가 확인되었습니다. 이미지 변조 의심 신호는 뚜렷하지 않았습니다.",
+    "detailedReasons": [
+      {"type":"GENERATION","title":"AI 생성 의심 신호","description":"AI 생성 분석에서 의심 기준 이상의 점수가 확인되었습니다."}
+    ],
+    "actionGuides": [
+      {"title":"송금과 개인정보 제공 멈추기","description":"요청한 사람과 실제 용도를 확인할 때까지 송금하거나 개인정보를 보내지 마세요."},
+      {"title":"공식 연락처로 확인하기","description":"이미지에 적힌 번호 대신 공식 홈페이지에서 연락처를 찾아 확인하세요."},
+      {"title":"이미지 출처 확인하기","description":"공식 홈페이지의 게시물이나 원본 자료와 비교해 보세요."}
+    ],
+    "reassurance": "서두르지 않아도 됩니다. 판단이 어렵다면 믿을 수 있는 사람과 함께 확인해 보세요.",
+    "summaryModel": "configured-gemini-model",
+    "summarizedAt": "2026-11-25T06:30:00.000Z"
+  }
+}
+```
+
+그 외 상태의 `result` 일부 예시는 다음과 같습니다.
+
+```json
+[
+  {"summaryStatus":"PENDING","summary":null,"detailedReasons":[],"actionGuides":[],"reassurance":null},
+  {"summaryStatus":"FAILED","summary":null,"detailedReasons":[],"actionGuides":[],"reassurance":null},
+  {"summaryStatus":null,"summary":null,"detailedReasons":[],"actionGuides":[],"reassurance":null},
+  {"summaryStatus":"COMPLETED","summary":"기존에 저장된 요약입니다.","detailedReasons":[],"actionGuides":[],"reassurance":null}
+]
+```
+
+PENDING이면 요약 영역만 로딩 상태로 표시합니다. FAILED나 null이면 AI 상세를 계속 표시하고 요약 영역을 생략할 수 있습니다. 기존 COMPLETED는 기존 summary를 표시하며 빈 목록과 null인 조언 영역을 생략합니다. 조회 시 Gemini를 다시 호출하지 않습니다.

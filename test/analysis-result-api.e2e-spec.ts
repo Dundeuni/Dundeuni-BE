@@ -114,7 +114,10 @@ describe('analysis result GET API', () => {
           generation: { modelName: 'CuRe', displayScore: 80 },
           manipulation: { modelName: 'TruFor', displayScore: 10 },
         },
-        overallResult: { decision: 'GENERATION_OR_MANIPULATION_SUSPECTED' },
+        overallResult: {
+          decision: 'GENERATION_OR_MANIPULATION_SUSPECTED',
+          decisionLabel: '위험',
+        },
       },
     });
     expect(JSON.stringify(response.body)).not.toMatch(
@@ -257,7 +260,15 @@ describe('analysis result GET API', () => {
         .expect(200);
       expect(response.body.result).toMatchObject({
         aiRiskLevel: null,
-        overallResult: { decision: expected },
+        overallResult: {
+          decision: expected,
+          decisionLabel:
+            expected === 'NO_CLEAR_SIGNAL'
+              ? '안전'
+              : expected === 'INCONCLUSIVE'
+                ? '주의'
+                : '위험',
+        },
         models: {
           generation: {
             displayScore: null,
@@ -279,6 +290,11 @@ describe('analysis result GET API', () => {
   );
   it('normalizes both failed models and does not present stale reasons as evidence', async () => {
     const stored = row();
+    Object.assign(stored, {
+      status: 'FAILED',
+      imageResultStatus: 'FAILED',
+      errorCode: 'ANALYSIS503',
+    });
     for (const model of stored.modelResults)
       Object.assign(model, { status: 'FAILED', errorCode: 'MODEL_FAILED' });
     repository.findWithModelResults.mockResolvedValue(stored);
@@ -297,7 +313,11 @@ describe('analysis result GET API', () => {
         errorCode: 'MODEL_FAILED',
       });
     }
-    expect(response.body.result.overallResult.decision).toBe('INCONCLUSIVE');
+    expect(response.body.result).toMatchObject({
+      status: 'FAILED',
+      errorCode: 'ANALYSIS503',
+      overallResult: { decision: 'INCONCLUSIVE', decisionLabel: '판단 불가' },
+    });
     expect(response.body.result.guides.join(' ')).toContain(
       'AI 생성 분석에 실패',
     );

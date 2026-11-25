@@ -51,6 +51,7 @@ describe('IMAGE analysis API', () => {
           modelVersion: null,
           imageResultStatus: null,
           summary: null,
+          summaryDetail: null,
           summaryStatus: null,
           summaryModel: null,
           summarizedAt: null,

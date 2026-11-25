@@ -3,12 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ApiError } from '../../common/http/api-error';
 import { randomUUID } from 'node:crypto';
-import { AnalysisSummaryJob } from '@prisma/client';
+import { AnalysisSummaryJob, Prisma } from '@prisma/client';
 import {
   positiveSetting,
   retryDelay,
   SummaryError,
 } from './gemini-summary.client';
+
+import { parseSummaryDetail, SummaryDetail } from './image-summary-content';
 
 @Injectable()
 export class AnalysisSummaryRepository {
@@ -37,6 +39,7 @@ export class AnalysisSummaryRepository {
         data: {
           summaryStatus: 'PENDING',
           summary: null,
+          summaryDetail: Prisma.DbNull,
           summaryModel: null,
           summarizedAt: null,
         },
@@ -89,8 +92,13 @@ export class AnalysisSummaryRepository {
   }
   async finish(
     job: AnalysisSummaryJob,
-    output: { summary: string; model: string } | SummaryError,
+    output:
+      { summary: string; model: string; detail: SummaryDetail } | SummaryError,
   ) {
+    const detail =
+      output instanceof SummaryError ? null : parseSummaryDetail(output.detail);
+    if (!(output instanceof SummaryError) && !detail)
+      throw new SummaryError('SUMMARY_INVALID_RESPONSE');
     const maxAttempts = positiveSetting(
       this.config,
       'GEMINI_SUMMARY_MAX_ATTEMPTS',
@@ -134,12 +142,14 @@ export class AnalysisSummaryRepository {
             ? {
                 summaryStatus: retry ? 'PENDING' : 'FAILED',
                 summary: null,
+                summaryDetail: Prisma.DbNull,
                 summaryModel: null,
                 summarizedAt: null,
               }
             : {
                 summaryStatus: 'COMPLETED',
                 summary: output.summary,
+                summaryDetail: detail ? { ...detail } : Prisma.DbNull,
                 summaryModel: output.model,
                 summarizedAt: new Date(),
               },
@@ -178,6 +188,7 @@ export class AnalysisSummaryRepository {
         data: {
           summaryStatus: 'PENDING',
           summary: null,
+          summaryDetail: Prisma.DbNull,
           summaryModel: null,
           summarizedAt: null,
         },
@@ -200,6 +211,10 @@ export class AnalysisSummaryRepository {
     });
     if (!row)
       throw new ApiError(404, 'COMMON404', '분석 기록을 찾을 수 없습니다.');
+    const detail =
+      row.summaryStatus === 'COMPLETED'
+        ? parseSummaryDetail(row.summaryDetail)
+        : null;
     return {
       isSuccess: true,
       code: 'ANALYSIS200',
@@ -208,6 +223,9 @@ export class AnalysisSummaryRepository {
         analysisId: row.id,
         summaryStatus: row.summaryStatus,
         summary: row.summaryStatus === 'COMPLETED' ? row.summary : null,
+        detailedReasons: detail?.detailedReasons ?? [],
+        actionGuides: detail?.actionGuides ?? [],
+        reassurance: detail?.reassurance ?? null,
         summaryModel:
           row.summaryStatus === 'COMPLETED' ? row.summaryModel : null,
         summarizedAt:

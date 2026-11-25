@@ -76,6 +76,7 @@ model Analysis {
   modelResults      AnalysisModelResult[]
   summaryJob        AnalysisSummaryJob?
   summary           String?
+  summaryDetail     Json?
   summaryStatus     AnalysisSummaryStatus?
   summaryModel      String?
   summarizedAt      DateTime?
