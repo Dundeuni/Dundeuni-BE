@@ -88,7 +88,7 @@ export function summaryInput(rows: AnalysisModelResult[]) {
   };
 }
 export type SummaryInput = ReturnType<typeof summaryInput>;
-export const SUMMARY_INSTRUCTION = `모델 분석 결과를 고령층도 이해하는 한국어 2~4문장으로 요약한다. 생성과 변조를 구분하고 판정과 실행 실패를 정확히 반영한다. INCONCLUSIVE는 판단 불가, 미요청은 미분석, FAILED는 분석 실패로 설명한다. 점수를 합산하거나 사기 확률로 표현하지 않는다. 진위나 사기를 확정하지 않고 필요하면 출처와 원본 확인을 권한다. 근거를 만들거나 불안을 조성하지 않는다. 제공된 구조화된 판정 외의 근거를 추정하지 않는다. JSON summary와 generationDecision, manipulationDecision, overallDecision을 반환한다. 모델 decision과 대표 decision은 입력 값을 그대로 복사한다. summary에는 AI 생성과 이미지 변조 각각의 결과를 주어가 명확한 별도 문장으로 설명한다. 생성 판정은 AI 생성이라는 표현을, 변조 판정은 이미지 변조라는 표현을 사용한다. FAILED는 분석 실패를, 미요청은 분석하지 않았음을 명시한다.`;
+export const SUMMARY_INSTRUCTION = `모델 분석 결과를 고령층도 이해하는 한국어 6~10문장으로 상세히 설명한다. 종합 결과, AI 생성 판정과 점수의 의미, 이미지 변조 판정과 점수의 의미, 분석 한계, 구체적인 대응 방법 순으로 설명한다. 점수는 모델의 표시 점수이며 확률이 아니다. 입력에 점수가 없으면 언급하지 않는다. 금전이나 개인정보 요청이 있다면 공식 연락처로 별도 확인하도록 안내한다. 같은 내용을 반복하지 않는다. 생성과 변조를 구분하고 판정과 실행 실패를 정확히 반영한다. INCONCLUSIVE는 판단 불가, 미요청은 미분석, FAILED는 분석 실패로 설명한다. 점수를 합산하거나 사기 확률로 표현하지 않는다. 진위나 사기를 확정하지 않고 필요하면 출처와 원본 확인을 권한다. 근거를 만들거나 불안을 조성하지 않는다. 제공된 구조화된 판정 외의 근거를 추정하지 않는다. JSON summary와 generationDecision, manipulationDecision, overallDecision을 반환한다. 모델 decision과 대표 decision은 입력 값을 그대로 복사한다. summary에는 AI 생성과 이미지 변조 각각의 결과를 주어가 명확한 별도 문장으로 설명한다. 생성 판정은 AI 생성이라는 표현을, 변조 판정은 이미지 변조라는 표현을 사용한다. FAILED는 분석 실패를, 미요청은 분석하지 않았음을 명시한다.`;
 export function validateSummary(text: string, input: SummaryInput): string {
   let data: Record<string, unknown>;
   try {
@@ -111,9 +111,9 @@ export function validateSummary(text: string, input: SummaryInput): string {
     .filter((s) => s.trim());
   if (
     summary.length < 20 ||
-    summary.length > 600 ||
-    sentences.length < 2 ||
-    sentences.length > 4 ||
+    summary.length > 1500 ||
+    sentences.length < 6 ||
+    sentences.length > 10 ||
     !/[가-힣]/u.test(summary) ||
     /[\n<>]|```|https?:\/\/|사기\s*(확률|가능성)|100\s*%|확실히|확정적으로|진짜\s*이미지|안전한\s*이미지|조작된 이미지입니다/u.test(
       summary,
