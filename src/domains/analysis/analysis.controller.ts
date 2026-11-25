@@ -64,7 +64,7 @@ export class AnalysisController {
   @ApiOperation({
     summary: '이미지 분석 결과 상세 조회',
     description:
-      '저장된 분석 및 모델별 결과를 조회합니다. 완료된 이미지의 대표 판정은 위험·주의·안전입니다. 요약은 /summary에서 별도로 조회합니다.',
+      '저장된 분석 및 모델별 결과를 조회합니다. 완료된 이미지의 대표 판정은 위험·주의·안전입니다. 저장된 구조화 요약도 함께 반환합니다. PENDING이면 동일 API를 재조회합니다.',
   })
   @ApiResponse({ status: 200, type: AnalysisResultResponseDto })
   @ApiResponse({ status: 401, description: 'AUTH401: JWT 인증 실패' })
@@ -83,7 +83,8 @@ export class AnalysisController {
 
   @Get(':analysisId/summary')
   @ApiOperation({
-    summary: '이미지 분석 비동기 요약 조회',
+    summary: '이미지 분석 비동기 요약 조회 (하위 호환)',
+    deprecated: true,
     description:
       'PENDING, FAILED, 미생성은 요약과 안심 조언이 null이며 상세 배열은 비어 있습니다. 기존 완료 기록의 요약 문자열은 유지됩니다.',
   })
