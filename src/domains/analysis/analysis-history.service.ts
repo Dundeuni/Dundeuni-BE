@@ -98,8 +98,9 @@ export class AnalysisHistoryService {
             : [],
       createdAt: row.createdAt.toISOString(),
       completedAt: row.completedAt?.toISOString() ?? null,
+      expiresAt: row.expiresAt.toISOString(),
       detail: this.imageSummaries.supports(row.type)
-        ? this.imageSummaries.project(row)
+        ? { ...this.imageSummaries.project(row), imageResultStatus: row.imageResultStatus, modelResults: row.modelResults }
         : null,
     };
   }
