@@ -1,3 +1,4 @@
+import { parseSummaryDetail } from './image-summary-content';
 import { AnalysisSummaryRepository } from './analysis-summary.repository';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -266,6 +267,9 @@ export class AnalysisService {
       row.modelResults.find((model) => model.kind === 'MANIPULATION'),
     );
     const overallResult = calculateOverallResult(generation, manipulation);
+    const summaryStatus = row.type === 'IMAGE' ? row.summaryStatus ?? null : null;
+    const completed = summaryStatus === 'COMPLETED';
+    const detail = completed ? parseSummaryDetail(row.summaryDetail) : null;
     return {
       isSuccess: true,
       code: 'ANALYSIS200',
@@ -296,6 +300,13 @@ export class AnalysisService {
               }
             : overallResult,
         guides: resultGuides(overallResult, generation, manipulation),
+        summaryStatus,
+        summary: completed ? row.summary : null,
+        detailedReasons: detail?.detailedReasons ?? [],
+        actionGuides: detail?.actionGuides ?? [],
+        reassurance: detail?.reassurance ?? null,
+        summaryModel: completed ? row.summaryModel : null,
+        summarizedAt: completed ? (row.summarizedAt?.toISOString() ?? null) : null,
       },
     };
   }
