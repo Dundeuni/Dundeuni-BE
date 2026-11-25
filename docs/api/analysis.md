@@ -977,13 +977,13 @@ HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사�
 
 점수가 null이면 점수 미제공으로 표시합니다. 기존 API의 `modelName`, `modelVersion`, 모델 `limitations` 그리고 요약의 `summaryModel`은 호환을 위해 응답에 있으며 화면 표시 대상에서 제외합니다. 별도 종합 점수를 계산해 표시하지 않습니다.
 
-`GET /api/analysis/{analysisId}/summary`의 신규 완료 응답 예시입니다.
+`GET /api/analysis/{analysisId}`의 통합 요약 필드 일부 예시입니다. 기존 상세 필드는 모두 유지합니다. `/summary`는 하위 호환용이며 신규 FE는 호출하지 않습니다.
 
 ```json
 {
   "isSuccess": true,
   "code": "ANALYSIS200",
-  "message": "이미지 분석 요약 조회에 성공했습니다.",
+  "message": "분석 결과 조회에 성공했습니다.",
   "result": {
     "analysisId": "8c1b24c0-3186-4ee5-a679-74acb055b001",
     "summaryStatus": "COMPLETED",
@@ -1015,3 +1015,5 @@ HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사�
 ```
 
 PENDING이면 요약 영역만 로딩 상태로 표시합니다. FAILED나 null이면 AI 상세를 계속 표시하고 요약 영역을 생략할 수 있습니다. 기존 COMPLETED는 기존 summary를 표시하며 빈 목록과 null인 조언 영역을 생략합니다. 조회 시 Gemini를 다시 호출하지 않습니다.
+
+신규 FE는 상세 GET 하나만 사용하며 PENDING이면 같은 GET을 재조회합니다. IMAGE 이외에는 요약 상태 및 문자열 필드는 null, 배열은 []입니다. 기존 요약 생성·저장 및 검사 기록 조회는 변경하지 않습니다.
