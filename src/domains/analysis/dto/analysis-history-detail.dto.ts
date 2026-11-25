@@ -16,13 +16,14 @@ export class AnalysisHistoryDetailDto {
   @ApiProperty({ type: [AnalysisHistoryReasonDto], nullable: true }) reasons!:
     AnalysisHistoryReasonDto[] | null;
   @ApiProperty({ format: 'date-time' }) createdAt!: string;
+  @ApiProperty({ format: 'date-time' }) expiresAt!: string;
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   completedAt!: string | null;
   @ApiProperty({
-    type: ImageHistorySummaryDto,
+    type: 'object',
     nullable: true,
     description:
-      'IMAGE는 저장된 Gemini 요약과 상태·모델·시각을 반환합니다. 다른 유형 상세는 후속 구현 전까지 null입니다.',
+      'IMAGE는 저장된 Gemini 요약과 모델별 상세 결과를 반환합니다. 다른 유형 상세는 후속 구현 전까지 null입니다.',
   })
   detail!: ImageHistorySummaryDto | Record<string, unknown> | null;
 }
