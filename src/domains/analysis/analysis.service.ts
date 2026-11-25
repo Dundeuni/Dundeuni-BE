@@ -8,6 +8,7 @@ import { ApiError } from '../../common/http/api-error';
 import { AnalysisRepository } from './analysis.repository';
 import { AnalysisUsageService } from './analysis-usage.service';
 import { ImageAnalysisService } from './image-analysis.service';
+import { extractPhoneNumbers } from './phone-number-extraction.service';
 import { normalizeTextInput } from './text-analysis.input';
 import { TextAiWorkflowService } from './text-ai-workflow.service';
 
@@ -59,6 +60,7 @@ export class AnalysisService {
           type: analysis.type,
           status: analysis.status,
           textPreview: analysis.textPreview,
+          extractedPhoneNumbers: extractPhoneNumbers(text, 'TEXT'),
           createdAt: analysis.createdAt.toISOString(),
           updatedAt: analysis.updatedAt.toISOString(),
           expiresAt: analysis.expiresAt.toISOString(),

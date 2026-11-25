@@ -1,3 +1,4 @@
+import { textTestAuthorization, textTestSecret } from './fixtures/text-risk';
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -49,6 +50,7 @@ liveDescribe(
         throw Error('Live test database guard');
       const config = new ConfigService({
         NODE_ENV: 'development',
+        JWT_ACCESS_SECRET: textTestSecret,
         TEXT_AI_PROVIDER: 'http',
         AI_SERVICE_BASE_URL: base,
         AI_SERVICE_TOKEN: token,
@@ -141,6 +143,7 @@ liveDescribe(
           const key = 'live-text-' + randomUUID();
           const response = await request(app.getHttpServer())
             .post('/api/analysis')
+            .set('Authorization', textTestAuthorization())
             .set('Idempotency-Key', key)
             .send({ type: 'TEXT', text });
           if (response.status !== 202) {
@@ -166,6 +169,7 @@ liveDescribe(
           expect(row.aiRiskLevel).toBeNull();
           const replay = await request(app.getHttpServer())
             .post('/api/analysis')
+            .set('Authorization', textTestAuthorization())
             .set('Idempotency-Key', key)
             .send({ type: 'TEXT', text });
           expect(replay.status).toBe(202);

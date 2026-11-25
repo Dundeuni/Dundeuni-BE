@@ -275,8 +275,8 @@ describe('IMAGE analysis API', () => {
       .attach('image', png(), 'sample.png')
       .expect(400);
   });
-  it('rejects TEXT with text while unimplemented', async () => {
-    await post().field('type', 'TEXT').field('text', 'example').expect(400);
+  it('requires JWT for TEXT sent to the shared multipart endpoint', async () => {
+    await post().field('type', 'TEXT').field('text', 'example').expect(401);
     expect(provider.analyze).not.toHaveBeenCalled();
   });
   it('uses the temporary user without an access token', async () => {

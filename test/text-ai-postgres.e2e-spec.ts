@@ -10,7 +10,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { AnalysisRepository } from '../src/domains/analysis/analysis.repository';
 import { AnalysisUsageService } from '../src/domains/analysis/analysis-usage.service';
 import { IMAGE_ANALYSIS_PROVIDER } from '../src/domains/analysis/image-analysis.service';
-import { textWire } from './fixtures/text-risk';
+import { textTestAuthorization, textWire } from './fixtures/text-risk';
 
 const dbDescribe = process.env.TEXT_AI_DB_URL ? describe : describe.skip;
 dbDescribe(
@@ -33,7 +33,12 @@ dbDescribe(
       AI_REQUEST_TIMEOUT_MS: '1000',
     });
     const post = (text = 'TEXT AI 검증용 합성 입력입니다.', key?: string) => {
-      const r = request(app.getHttpServer()).post('/api/analysis');
+      const r = request(app.getHttpServer())
+        .post('/api/analysis')
+        .set(
+          'Authorization',
+          textTestAuthorization('postgres-ocr-test-secret'),
+        );
       if (key) r.set('Idempotency-Key', key);
       return r.send({ type: 'TEXT', text });
     };
@@ -155,6 +160,7 @@ dbDescribe(
       transport.mockResolvedValueOnce(new Response('', { status: 503 }));
       await request(app.getHttpServer())
         .post('/api/analysis')
+        .set('Authorization', textTestAuthorization('postgres-ocr-test-secret'))
         .set('Idempotency-Key', key)
         .field('type', 'TEXT')
         .field('sourceType', 'SCREEN_CROP')
@@ -225,8 +231,16 @@ dbDescribe(
     });
     it('reuses completed responses without another AI call, rejects conflicting content and expired keys', async () => {
       const key = 'text-' + randomUUID();
-      const first = await post(undefined, key).expect(202);
-      const second = await post(undefined, key).expect(202);
+      const text = '검증용 문자입니다. 010-1234-5678로 연락하세요.';
+      const first = await post(text, key).expect(202);
+      const second = await post(text, key).expect(202);
+      expect(first.body.result.extractedPhoneNumbers).toEqual([
+        {
+          phoneNumber: '01012345678',
+          displayNumber: '010-1234-5678',
+          source: 'TEXT',
+        },
+      ]);
       expect(second.body).toEqual(first.body);
       expect(transport).toHaveBeenCalledTimes(1);
       await post('different TEXT content', key).expect(409);
@@ -234,7 +248,7 @@ dbDescribe(
         where: { id: first.body.result.analysisId },
         data: { expiresAt: new Date(0) },
       });
-      await post(undefined, key).expect(409);
+      await post(text, key).expect(409);
       expect(transport).toHaveBeenCalledTimes(1);
     });
     it('allows distinct keys with identical text', async () => {

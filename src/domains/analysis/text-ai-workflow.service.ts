@@ -6,6 +6,10 @@ import { ApiError } from '../../common/http/api-error';
 import { AnalysisRepository } from './analysis.repository';
 import { TEXT_ANALYSIS_PROVIDER } from './http-text-analysis.provider';
 import { TextAnalysisProvider, TEXT_RETENTION_MS } from './text-analysis.input';
+import {
+  ExtractedPhoneNumberDto,
+  extractPhoneNumbers,
+} from './phone-number-extraction.service';
 import { TextAnalysisError } from './text-analysis.error';
 import {
   storedTextRiskResult,
@@ -57,6 +61,8 @@ export class TextAiWorkflowService {
       'text' in input ? Array.from(input.text).slice(0, 200).join('') : '';
     const sourceType =
       'text' in input ? ('TEXT' as const) : ('SCREEN_CROP' as const);
+    const directNumbers =
+      'text' in input ? extractPhoneNumbers(input.text, 'TEXT') : [];
     const createdAt = new Date();
     let analysis: Analysis;
     try {
@@ -99,7 +105,7 @@ export class TextAiWorkflowService {
             '만료된 키입니다. 새 키를 사용해 주세요.',
           );
         if (analysis.status === 'COMPLETED' && analysis.textResult !== null)
-          return this.response(analysis);
+          return this.response(analysis, directNumbers);
         if (analysis.status === 'FAILED') {
           const code =
             analysis.errorCode === 'ANALYSIS503' ? 'ANALYSIS503' : 'COMMON500';
@@ -167,11 +173,16 @@ export class TextAiWorkflowService {
         elementId,
         sourceType,
       });
+      // The contract validator above verified text. Only OCR uses this transient field.
+      const extractedPhoneNumbers =
+        sourceType === 'SCREEN_CROP' && !result.quality.poorOcrConfidence
+          ? extractPhoneNumbers((value as { text: string }).text, 'OCR')
+          : directNumbers;
       const saved = await this.repository.completeText(
         analysis.id,
         storedTextRiskResult(result),
       );
-      return this.response(saved);
+      return this.response(saved, extractedPhoneNumbers);
     } catch (error) {
       const failure =
         error instanceof ApiError
@@ -194,7 +205,10 @@ export class TextAiWorkflowService {
       if (timer !== undefined) clearTimeout(timer);
     }
   }
-  private response(row: Analysis) {
+  private response(
+    row: Analysis,
+    extractedPhoneNumbers: ExtractedPhoneNumberDto[],
+  ) {
     return {
       isSuccess: true,
       code: 'ANALYSIS202',
@@ -208,6 +222,7 @@ export class TextAiWorkflowService {
         updatedAt: row.updatedAt.toISOString(),
         expiresAt: row.expiresAt.toISOString(),
         textResult: row.textResult,
+        extractedPhoneNumbers,
       },
     };
   }

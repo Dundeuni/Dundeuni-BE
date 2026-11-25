@@ -602,7 +602,7 @@ DB suite까지 포함한 `npm test -- --runInBand`를 실행한다. 일반 npm t
 ## Issue #13 — POST /api/analysis — TEXT
 
 `Content-Type: application/json`으로 다음을 전송한다. IMAGE multipart 요청과 응답은 유지한다.
-임시 사용자 development-user는 그대로 사용하며 실제 인증은 이번 범위가 아니다.
+현재 TEXT 요청은 JWT Bearer가 필요하며 인증된 사용자의 ID를 사용합니다.
 
 ```json
 { "type": "TEXT", "text": "  이 메시지가 의심스러워요.  " }
@@ -697,4 +697,8 @@ HTTP 모드에서만 TEXT Idempotency-Key를 지원한다. 완료 응답 재사�
 [POST TEXT/OCR 계약](../API-POST-TEXT-OCR.md)을 참고하세요. 과거 기록의 OCR 공개 경로 미연결 설명은 당시 시점 기준이며 현재는 명시적 sourceType 계약으로 연결합니다.
 
 ### OCR 인증 및 저장 조회 검증
-개발 환경에서도 Authorization을 전달하면 JWT를 검증하고 sub를 사용한다. 토큰 없는 development 요청에만 development-user를 적용하며 그 외 환경은 JWT 필수다. IMAGE와 TEXT 모두 같은 가드를 사용한다. findActiveTextForUser는 id·userId·TEXT·미만료 조건으로 textResult까지 조회한다. 이 브랜치에는 공개 GET 상세 API가 없어 저장 재조회는 Repository로 검증한다.
+TEXT·OCR은 개발 환경에서도 JWT Bearer가 필수이며 JWT sub로 저장합니다. IMAGE는 기존 개발 인증 정책을 적용합니다. findActiveTextForUser는 id·userId·TEXT·미만료 조건으로 textResult까지 조회한다. 이 브랜치에는 공개 GET 상세 API가 없어 저장 재조회는 Repository로 검증한다.
+
+## Issue #33 — TEXT·OCR 전화번호 추출
+
+`POST /api/analysis`의 TEXT·OCR 202 응답에 `result.extractedPhoneNumbers`가 추가됩니다. 최초 응답의 번호를 화면에 보관하고 사용자가 선택할 때 기존 전화번호 분석 API에 전달합니다. 지원 번호, JWT, 미검출, 멱등성 및 연동 예시는 [POST TEXT/OCR 계약](../API-POST-TEXT-OCR.md#33-전화번호-선택-분석)을 참고합니다.

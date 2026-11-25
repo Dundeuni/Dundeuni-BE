@@ -1,3 +1,4 @@
+import { textTestAuthorization, textTestSecret } from './fixtures/text-risk';
 import { configureAnalysisSwagger } from '../src/domains/analysis/analysis.swagger';
 import { randomUUID } from 'node:crypto';
 import { INestApplication, Logger, ValidationPipe } from '@nestjs/common';
@@ -26,6 +27,7 @@ dbDescribe('#13 actual PostgreSQL verification (isolated test DB only)', () => {
   const post = (text: unknown) =>
     request(app.getHttpServer())
       .post('/api/analysis')
+      .set('Authorization', textTestAuthorization())
       .send({ type: 'TEXT', text });
   beforeAll(async () => {
     const url = new URL(process.env.TEXT13_DB_URL!);
@@ -44,6 +46,8 @@ dbDescribe('#13 actual PostgreSQL verification (isolated test DB only)', () => {
       .useValue(
         new ConfigService({
           NODE_ENV: 'development',
+          JWT_ACCESS_SECRET: textTestSecret,
+          TEXT_AI_PROVIDER: 'disabled',
           ANALYSIS_MAX_FILE_BYTES: '100000',
           ANALYSIS_RETENTION_SECONDS: '86400',
           AI_REQUEST_TIMEOUT_MS: '100',
